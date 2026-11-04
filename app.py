@@ -8,13 +8,37 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_data
 def load_data(file):
-    df = pd.read_excel(file, header=1)
+    # 1. Başlık satırını otomatik bulma (Nihai Formata Uyumlu)
+    df_temp = pd.read_excel(file, header=None, nrows=10)
+    header_idx = 0
+    for i, row in df_temp.iterrows():
+        row_str = " ".join(row.astype(str)).lower()
+        if "birim" in row_str and "oran" in row_str:
+            header_idx = i
+            break
+            
+    # Dosyayı doğru başlık satırından okuma
+    df = pd.read_excel(file, header=header_idx)
+    
+    # 2. Sütun isimlerindeki görünmez boşlukları temizleme
+    df.columns = df.columns.astype(str).str.strip()
+    
+    # 3. İsim farklılıklarını tolere etme
+    sutun_degisiklikleri = {}
+    for col in df.columns:
+        if col.lower() == "birim adi": sutun_degisiklikleri[col] = "Birim Adı"
+        elif col.lower() == "birim id": sutun_degisiklikleri[col] = "Birim ID" # id kısmını büyük ID yapıyoruz
+    if sutun_degisiklikleri:
+        df = df.rename(columns=sutun_degisiklikleri)
+        
+    # Standart isimlendirme şemamız (Gereken Tarama ve Oran kolonları Pandas tarafından .1 ve .2 diye isimlendirilir)
     df = df.rename(columns={
-        'Birim Adı': 'Birim Adı', 'Birim Id': 'Birim ID',
+        'Birim Id': 'Birim ID',
         'Gereken Tarama': 'Mamografi Gereken', 'Oran(%)': 'Mamografi Oranı',
         'Gereken Tarama.1': 'Serviks Gereken', 'Oran(%).1': 'Serviks Oranı',
         'Gereken Tarama.2': 'Kolorektal Gereken', 'Oran(%).2': 'Kolorektal Oranı'
     })
+    
     df = df.fillna(0)
     
     districts = [
@@ -43,7 +67,7 @@ def load_data(file):
     
     return df
 
-# Dışa Aktarma Fonksiyonları
+# Dışa Aktarma Fonksiyonları (Excel & PDF)
 @st.cache_data
 def get_excel(df):
     output = io.BytesIO()
@@ -53,7 +77,6 @@ def get_excel(df):
 
 @st.cache_data
 def get_pdf(df, title):
-    # Tablonun HTML halini oluşturuyoruz
     html_content = f"""
     <html>
     <head>
@@ -74,7 +97,6 @@ def get_pdf(df, title):
     </html>
     """
     pdf_buffer = io.BytesIO()
-    # xhtml2pdf ile doğrudan bellekte PDF üretiyoruz (Linux paketine gerek kalmaz)
     pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
@@ -112,7 +134,6 @@ if yuklenen_dosya is not None:
             ilce_grup_sirali = ilce_grup.sort_values(by='Genel Oran (%)', ascending=False).reset_index(drop=True)
             ilce_grup_sirali.index += 1
             
-            # Yüzdelik değerleri metne çeviriyoruz (PDF ve Excel daha rahat okusun diye)
             ilce_grup_pdf = ilce_grup_sirali.copy()
             ilce_grup_pdf['Genel Oran (%)'] = ilce_grup_pdf['Genel Oran (%)'].apply(lambda x: f"%{x:.2f}")
             
@@ -124,9 +145,9 @@ if yuklenen_dosya is not None:
             
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button("📥 Excel İndir", data=get_excel(ilce_grup_sirali), file_name=f"{tarama_turu}_Ilce_Siralama.xlsx", key=f"{tarama_turu}_ilce_ex")
+                st.download_button("📥 Excel İndir (İlçe)", data=get_excel(ilce_grup_sirali), file_name=f"{tarama_turu}_Ilce_Siralama.xlsx", key=f"{tarama_turu}_ilce_ex")
             with col2:
-                st.download_button("📄 PDF İndir", data=get_pdf(ilce_grup_pdf, f"{ilce_baslik} - {tarama_turu} Ilce Siralamasi"), file_name=f"{tarama_turu}_Ilce_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_ilce_pdf")
+                st.download_button("📄 PDF İndir (İlçe)", data=get_pdf(ilce_grup_pdf, f"{ilce_baslik} - {tarama_turu} Ilce Siralamasi"), file_name=f"{tarama_turu}_Ilce_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_ilce_pdf")
             
             st.markdown("---")
 
@@ -149,9 +170,9 @@ if yuklenen_dosya is not None:
             
             col3, col4 = st.columns(2)
             with col3:
-                st.download_button("📥 Excel İndir", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
+                st.download_button("📥 Excel İndir (Birim)", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
             with col4:
-                st.download_button("📄 PDF İndir", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
+                st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
         with tab1:
             tablo_goster("Mamografi")
@@ -163,6 +184,6 @@ if yuklenen_dosya is not None:
             tablo_goster("Kolorektal")
 
     except Exception as e:
-        st.error(f"Dosya okunurken bir hata oluştu. Hata: {e}")
+        st.error(f"Dosya okunurken bir hata oluştu. Lütfen dosyanızın HSYS standart KAN-TAR çıktısı olduğundan emin olun. Hata detayı: {e}")
 else:
     st.info("👈 Lütfen sol menüden analiz edilecek Excel dosyasını sisteme yükleyin.")
