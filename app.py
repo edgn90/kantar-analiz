@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
-from weasyprint import HTML
+from xhtml2pdf import pisa
 
 # Sayfa Ayarları
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
@@ -43,7 +43,7 @@ def load_data(file):
     
     return df
 
-# Dışa Aktarma Fonksiyonları (Performans için Önbellekli)
+# Dışa Aktarma Fonksiyonları
 @st.cache_data
 def get_excel(df):
     output = io.BytesIO()
@@ -53,16 +53,17 @@ def get_excel(df):
 
 @st.cache_data
 def get_pdf(df, title):
+    # Tablonun HTML halini oluşturuyoruz
     html_content = f"""
-    <!DOCTYPE html>
     <html>
     <head>
     <meta charset="utf-8">
     <style>
-        body {{ font-family: Arial, sans-serif; font-size: 11px; }}
+        @page {{ size: A4; margin: 1cm; }}
+        body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10px; }}
         h2 {{ text-align: center; color: #333; }}
-        table {{ border-collapse: collapse; width: 100%; margin-top: 20px; }}
-        th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; }}
         th {{ background-color: #f4f6f9; }}
     </style>
     </head>
@@ -72,7 +73,10 @@ def get_pdf(df, title):
     </body>
     </html>
     """
-    return HTML(string=html_content).write_pdf()
+    pdf_buffer = io.BytesIO()
+    # xhtml2pdf ile doğrudan bellekte PDF üretiyoruz (Linux paketine gerek kalmaz)
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
+    return pdf_buffer.getvalue()
 
 st.title("📊 KAN-TAR Analiz Sistemi")
 
@@ -105,9 +109,12 @@ if yuklenen_dosya is not None:
             st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
             ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
             ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
-            
             ilce_grup_sirali = ilce_grup.sort_values(by='Genel Oran (%)', ascending=False).reset_index(drop=True)
             ilce_grup_sirali.index += 1
+            
+            # Yüzdelik değerleri metne çeviriyoruz (PDF ve Excel daha rahat okusun diye)
+            ilce_grup_pdf = ilce_grup_sirali.copy()
+            ilce_grup_pdf['Genel Oran (%)'] = ilce_grup_pdf['Genel Oran (%)'].apply(lambda x: f"%{x:.2f}")
             
             st.dataframe(
                 ilce_grup_sirali.style.format({'Genel Oran (%)': "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"})
@@ -115,23 +122,11 @@ if yuklenen_dosya is not None:
                 use_container_width=True
             )
             
-            # İlçe Tablosu İndirme Butonları
             col1, col2 = st.columns(2)
             with col1:
-                st.download_button(
-                    "📥 Excel İndir (İlçe Sıralaması)", 
-                    data=get_excel(ilce_grup_sirali), 
-                    file_name=f"{tarama_turu}_Ilce_Siralama.xlsx",
-                    key=f"{tarama_turu}_ilce_excel"
-                )
+                st.download_button("📥 Excel İndir", data=get_excel(ilce_grup_sirali), file_name=f"{tarama_turu}_Ilce_Siralama.xlsx", key=f"{tarama_turu}_ilce_ex")
             with col2:
-                st.download_button(
-                    "📄 PDF İndir (İlçe Sıralaması)", 
-                    data=get_pdf(ilce_grup_sirali, f"{ilce_baslik} - {tarama_turu} İlçe Sıralaması"), 
-                    file_name=f"{tarama_turu}_Ilce_Siralama.pdf",
-                    mime="application/pdf",
-                    key=f"{tarama_turu}_ilce_pdf"
-                )
+                st.download_button("📄 PDF İndir", data=get_pdf(ilce_grup_pdf, f"{ilce_baslik} - {tarama_turu} Ilce Siralamasi"), file_name=f"{tarama_turu}_Ilce_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_ilce_pdf")
             
             st.markdown("---")
 
@@ -144,28 +139,19 @@ if yuklenen_dosya is not None:
             ]].reset_index(drop=True)
             gosterilecek_df.index += 1
             
+            gosterilecek_pdf = gosterilecek_df.copy()
+            gosterilecek_pdf[hedef_kolon] = gosterilecek_pdf[hedef_kolon].apply(lambda x: f"%{x:.2f}")
+            
             st.dataframe(
                 gosterilecek_df.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"}), 
                 use_container_width=True
             )
             
-            # Birim Tablosu İndirme Butonları
             col3, col4 = st.columns(2)
             with col3:
-                st.download_button(
-                    "📥 Excel İndir (Birim Sıralaması)", 
-                    data=get_excel(gosterilecek_df), 
-                    file_name=f"{tarama_turu}_Birim_Siralama.xlsx",
-                    key=f"{tarama_turu}_birim_excel"
-                )
+                st.download_button("📥 Excel İndir", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
             with col4:
-                st.download_button(
-                    "📄 PDF İndir (Birim Sıralaması)", 
-                    data=get_pdf(gosterilecek_df, f"{ilce_baslik} - {tarama_turu} Birim Bazlı Sıralama"), 
-                    file_name=f"{tarama_turu}_Birim_Siralama.pdf",
-                    mime="application/pdf",
-                    key=f"{tarama_turu}_birim_pdf"
-                )
+                st.download_button("📄 PDF İndir", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
         with tab1:
             tablo_goster("Mamografi")
