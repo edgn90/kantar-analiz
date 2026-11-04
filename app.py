@@ -120,18 +120,21 @@ if yuklenen_dosya is not None:
         
         st.sidebar.header("2. Filtreleme Seçenekleri")
         
-        # İlçe Filtresi
-        ilce_secenekleri = ["Tüm İlçeler"] + sorted(df['İlçe'].unique().tolist())
-        secilen_ilce = st.sidebar.selectbox("İlçe Seçin", ilce_secenekleri)
-        
-        st.sidebar.markdown("---")
-        
-        # YENİ: Oran Filtresi
-        st.sidebar.subheader("3. Oran Filtresi (Birimler İçin)")
-        min_oran, max_oran = st.sidebar.slider(
-            "Gösterilecek Başarı Oranı Aralığı (%)",
-            min_value=0, max_value=100, value=(0, 100), step=1
-        )
+        # Filtreleri bir Form içine alıyoruz (Sadece butona basıldığında çalışması için)
+        with st.sidebar.form(key="filtre_form"):
+            ilce_secenekleri = ["Tüm İlçeler"] + sorted(df['İlçe'].unique().tolist())
+            secilen_ilce = st.selectbox("İlçe Seçin", ilce_secenekleri)
+            
+            st.markdown("---")
+            
+            st.subheader("3. Oran Filtresi (Birimler İçin)")
+            min_oran, max_oran = st.slider(
+                "Gösterilecek Başarı Oranı Aralığı (%)",
+                min_value=0, max_value=100, value=(0, 100), step=1
+            )
+            
+            # Çalıştır butonu
+            calistir_butonu = st.form_submit_button(label="Çalıştır 🚀")
 
         tab1, tab2, tab3 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması"])
 
@@ -174,7 +177,6 @@ if yuklenen_dosya is not None:
             # --- ALT TABLO: BİRİM SIRALAMASI (Slider Oranına Göre Filtrelenmiş) ---
             st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
             
-            # Sadece slider'da seçilen aralıktaki birimleri filtreliyoruz
             birim_df_aralikli = filtrelenmis_df[
                 (filtrelenmis_df[hedef_kolon] >= min_oran) & 
                 (filtrelenmis_df[hedef_kolon] <= max_oran)
