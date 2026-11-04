@@ -10,10 +10,9 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 def load_data(file):
     # 1. Başlık satırını otomatik bulma (Tip hatalarına karşı %100 güvenli yöntem)
     df_temp = pd.read_excel(file, header=None, nrows=15)
-    header_idx = 1 # Varsayılan olarak 2. satır (indeks 1)
+    header_idx = 1 
     
     for i, row in df_temp.iterrows():
-        # Her bir hücreyi tek tek ve kesin olarak string'e (metne) çeviriyoruz
         row_degerleri = [str(hücre).lower() for hücre in row.tolist()]
         row_str = " ".join(row_degerleri)
         
@@ -21,7 +20,6 @@ def load_data(file):
             header_idx = i
             break
             
-    # Dosyayı doğru başlık satırından okuma
     df = pd.read_excel(file, header=header_idx)
     
     # 2. Sütun isimlerindeki görünmez boşlukları temizleme
@@ -36,7 +34,6 @@ def load_data(file):
     if sutun_degisiklikleri:
         df = df.rename(columns=sutun_degisiklikleri)
         
-    # Standart isimlendirme şemamız
     df = df.rename(columns={
         'Birim Id': 'Birim ID',
         'Gereken Tarama': 'Mamografi Gereken', 'Oran(%)': 'Mamografi Oranı',
@@ -67,7 +64,6 @@ def load_data(file):
 
     df['İlçe'] = df['Birim Adı'].apply(get_district)
     
-    # Veri tiplerini garantiye alma (Eğer oranlar metin olarak gelmişse sayıya çeviriyoruz)
     df['Mamografi Oranı'] = pd.to_numeric(df['Mamografi Oranı'], errors='coerce').fillna(0)
     df['Mamografi Gereken'] = pd.to_numeric(df['Mamografi Gereken'], errors='coerce').fillna(0)
     df['Serviks Oranı'] = pd.to_numeric(df['Serviks Oranı'], errors='coerce').fillna(0)
@@ -81,7 +77,6 @@ def load_data(file):
     
     return df
 
-# Dışa Aktarma Fonksiyonları (Excel & PDF)
 @st.cache_data
 def get_excel(df):
     output = io.BytesIO()
@@ -124,8 +119,19 @@ if yuklenen_dosya is not None:
         df = load_data(yuklenen_dosya)
         
         st.sidebar.header("2. Filtreleme Seçenekleri")
+        
+        # İlçe Filtresi
         ilce_secenekleri = ["Tüm İlçeler"] + sorted(df['İlçe'].unique().tolist())
         secilen_ilce = st.sidebar.selectbox("İlçe Seçin", ilce_secenekleri)
+        
+        st.sidebar.markdown("---")
+        
+        # YENİ: Oran Filtresi
+        st.sidebar.subheader("3. Oran Filtresi (Birimler İçin)")
+        min_oran, max_oran = st.sidebar.slider(
+            "Gösterilecek Başarı Oranı Aralığı (%)",
+            min_value=0, max_value=100, value=(0, 100), step=1
+        )
 
         tab1, tab2, tab3 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması"])
 
@@ -141,6 +147,7 @@ if yuklenen_dosya is not None:
             gereken_kolon = f"{tarama_turu} Gereken"
             yapilan_kolon = f"{tarama_turu} Yapılan"
             
+            # --- ÜST TABLO: İLÇE SIRALAMASI (Filtresiz Toplam Başarı) ---
             st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
             ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
             ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
@@ -164,8 +171,16 @@ if yuklenen_dosya is not None:
             
             st.markdown("---")
 
-            st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik})")
-            birim_df_sirali = filtrelenmis_df.sort_values(by=hedef_kolon, ascending=False)
+            # --- ALT TABLO: BİRİM SIRALAMASI (Slider Oranına Göre Filtrelenmiş) ---
+            st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
+            
+            # Sadece slider'da seçilen aralıktaki birimleri filtreliyoruz
+            birim_df_aralikli = filtrelenmis_df[
+                (filtrelenmis_df[hedef_kolon] >= min_oran) & 
+                (filtrelenmis_df[hedef_kolon] <= max_oran)
+            ]
+            
+            birim_df_sirali = birim_df_aralikli.sort_values(by=hedef_kolon, ascending=False)
             
             gosterilecek_df = birim_df_sirali[[
                 'İlçe', 'Birim Adı', 'Birim ID', gereken_kolon, yapilan_kolon, hedef_kolon
