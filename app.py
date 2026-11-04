@@ -8,11 +8,15 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_data
 def load_data(file):
-    # 1. Başlık satırını otomatik bulma (Nihai Formata Uyumlu)
-    df_temp = pd.read_excel(file, header=None, nrows=10)
-    header_idx = 0
+    # 1. Başlık satırını otomatik bulma (Tip hatalarına karşı %100 güvenli yöntem)
+    df_temp = pd.read_excel(file, header=None, nrows=15)
+    header_idx = 1 # Varsayılan olarak 2. satır (indeks 1)
+    
     for i, row in df_temp.iterrows():
-        row_str = " ".join(row.astype(str)).lower()
+        # Her bir hücreyi tek tek ve kesin olarak string'e (metne) çeviriyoruz
+        row_degerleri = [str(hücre).lower() for hücre in row.tolist()]
+        row_str = " ".join(row_degerleri)
+        
         if "birim" in row_str and "oran" in row_str:
             header_idx = i
             break
@@ -21,17 +25,18 @@ def load_data(file):
     df = pd.read_excel(file, header=header_idx)
     
     # 2. Sütun isimlerindeki görünmez boşlukları temizleme
-    df.columns = df.columns.astype(str).str.strip()
+    df.columns = [str(c).strip() for c in df.columns]
     
     # 3. İsim farklılıklarını tolere etme
     sutun_degisiklikleri = {}
     for col in df.columns:
         if col.lower() == "birim adi": sutun_degisiklikleri[col] = "Birim Adı"
-        elif col.lower() == "birim id": sutun_degisiklikleri[col] = "Birim ID" # id kısmını büyük ID yapıyoruz
+        elif col.lower() == "birim id": sutun_degisiklikleri[col] = "Birim ID"
+    
     if sutun_degisiklikleri:
         df = df.rename(columns=sutun_degisiklikleri)
         
-    # Standart isimlendirme şemamız (Gereken Tarama ve Oran kolonları Pandas tarafından .1 ve .2 diye isimlendirilir)
+    # Standart isimlendirme şemamız
     df = df.rename(columns={
         'Birim Id': 'Birim ID',
         'Gereken Tarama': 'Mamografi Gereken', 'Oran(%)': 'Mamografi Oranı',
@@ -61,6 +66,15 @@ def load_data(file):
         return "Diğer/Kurum Tabiplikleri"
 
     df['İlçe'] = df['Birim Adı'].apply(get_district)
+    
+    # Veri tiplerini garantiye alma (Eğer oranlar metin olarak gelmişse sayıya çeviriyoruz)
+    df['Mamografi Oranı'] = pd.to_numeric(df['Mamografi Oranı'], errors='coerce').fillna(0)
+    df['Mamografi Gereken'] = pd.to_numeric(df['Mamografi Gereken'], errors='coerce').fillna(0)
+    df['Serviks Oranı'] = pd.to_numeric(df['Serviks Oranı'], errors='coerce').fillna(0)
+    df['Serviks Gereken'] = pd.to_numeric(df['Serviks Gereken'], errors='coerce').fillna(0)
+    df['Kolorektal Oranı'] = pd.to_numeric(df['Kolorektal Oranı'], errors='coerce').fillna(0)
+    df['Kolorektal Gereken'] = pd.to_numeric(df['Kolorektal Gereken'], errors='coerce').fillna(0)
+    
     df['Mamografi Yapılan'] = (df['Mamografi Oranı'] * df['Mamografi Gereken'] / 100).round()
     df['Serviks Yapılan'] = (df['Serviks Oranı'] * df['Serviks Gereken'] / 100).round()
     df['Kolorektal Yapılan'] = (df['Kolorektal Oranı'] * df['Kolorektal Gereken'] / 100).round()
@@ -127,7 +141,6 @@ if yuklenen_dosya is not None:
             gereken_kolon = f"{tarama_turu} Gereken"
             yapilan_kolon = f"{tarama_turu} Yapılan"
             
-            # --- ÜST TABLO: İLÇE SIRALAMASI ---
             st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
             ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
             ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
@@ -151,7 +164,6 @@ if yuklenen_dosya is not None:
             
             st.markdown("---")
 
-            # --- ALT TABLO: BİRİM SIRALAMASI ---
             st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik})")
             birim_df_sirali = filtrelenmis_df.sort_values(by=hedef_kolon, ascending=False)
             
@@ -176,10 +188,8 @@ if yuklenen_dosya is not None:
 
         with tab1:
             tablo_goster("Mamografi")
-            
         with tab2:
             tablo_goster("Serviks")
-            
         with tab3:
             tablo_goster("Kolorektal")
 
