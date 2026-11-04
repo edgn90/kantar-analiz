@@ -6,10 +6,8 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_data
 def load_data(file):
-    # Sabit dosya yolu yerine yüklenen dosyayı okuyoruz
     df = pd.read_excel(file, header=1)
     
-    # Kolonları isimlendirme
     df = df.rename(columns={
         'Birim Adı': 'Birim Adı',
         'Birim Id': 'Birim ID',
@@ -49,44 +47,37 @@ def load_data(file):
 
 st.title("📊 KAN-TAR Analiz Sistemi")
 
-# Dosya Yükleme Alanı
 st.sidebar.header("1. Veri Yükleme")
 yuklenen_dosya = st.sidebar.file_uploader("KAN-TAR Excel Dosyasını Yükleyin", type=["xlsx", "xls"])
 
 if yuklenen_dosya is not None:
-    # Dosya yüklendiyse veriyi işle ve arayüzü göster
     try:
         df = load_data(yuklenen_dosya)
         
         st.sidebar.header("2. Filtreleme Seçenekleri")
-        tarama_turu = st.sidebar.selectbox("Tarama Türünü Seçin", ["Mamografi", "Serviks", "Kolorektal"])
+        # "Tüm İlçeler" seçeneğini varsayılan olarak başa ekliyoruz
+        ilce_secenekleri = ["Tüm İlçeler"] + sorted(df['İlçe'].unique().tolist())
+        secilen_ilce = st.sidebar.selectbox("İlçe Seçin", ilce_secenekleri)
 
-        tab1, tab2 = st.tabs(["🏥 İlçe Bazlı Birim Sıralaması", "📍 Toplu İlçe Sıralaması"])
+        # Tarama türlerine göre 3 ayrı sekme oluşturuyoruz
+        tab1, tab2, tab3 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması"])
 
-        with tab1:
-            st.subheader(f"Seçilen İlçe İçindeki Birimlerin {tarama_turu} Sıralaması")
-            secilen_ilce = st.sidebar.selectbox("İlçe Seçin", sorted(df['İlçe'].unique()))
-            
-            ilce_df = df[df['İlçe'] == secilen_ilce].copy()
+        def tablo_goster(tarama_turu):
+            # İlçe "Tüm İlçeler" değilse tabloyu filtrele
+            if secilen_ilce != "Tüm İlçeler":
+                filtrelenmis_df = df[df['İlçe'] == secilen_ilce].copy()
+                ilce_baslik = f"{secilen_ilce} İlçesi"
+            else:
+                filtrelenmis_df = df.copy()
+                ilce_baslik = "Tüm İstanbul Geneli"
+
             hedef_kolon = f"{tarama_turu} Oranı"
-            
-            ilce_df_sirali = ilce_df.sort_values(by=hedef_kolon, ascending=False)
-            gosterilecek_df = ilce_df_sirali[[
-                'Birim Adı', 'Birim ID', f"{tarama_turu} Gereken", f"{tarama_turu} Yapılan", hedef_kolon
-            ]].reset_index(drop=True)
-            gosterilecek_df.index += 1
-            
-            st.dataframe(
-                gosterilecek_df.style.format({hedef_kolon: "{:.2f}%", f"{tarama_turu} Gereken": "{:.0f}", f"{tarama_turu} Yapılan": "{:.0f}"}), 
-                use_container_width=True
-            )
-
-        with tab2:
-            st.subheader(f"Tüm İlçelerin {tarama_turu} Başarı Sıralaması")
             gereken_kolon = f"{tarama_turu} Gereken"
             yapilan_kolon = f"{tarama_turu} Yapılan"
             
-            ilce_grup = df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
+            # ÜST TABLO: İlçe Toplu Başarı Sıralaması
+            st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
+            ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
             ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
             
             ilce_grup_sirali = ilce_grup.sort_values(by='Genel Oran (%)', ascending=False).reset_index(drop=True)
@@ -98,7 +89,33 @@ if yuklenen_dosya is not None:
                 use_container_width=True
             )
             
+            st.markdown("---")
+
+            # ALT TABLO: AHB (Birim) Bazlı Sıralama
+            st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik})")
+            birim_df_sirali = filtrelenmis_df.sort_values(by=hedef_kolon, ascending=False)
+            
+            # Filtreye göre birimlerin hangi ilçede olduğunu da gösteriyoruz
+            gosterilecek_df = birim_df_sirali[[
+                'İlçe', 'Birim Adı', 'Birim ID', gereken_kolon, yapilan_kolon, hedef_kolon
+            ]].reset_index(drop=True)
+            gosterilecek_df.index += 1
+            
+            st.dataframe(
+                gosterilecek_df.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"}), 
+                use_container_width=True
+            )
+
+        with tab1:
+            tablo_goster("Mamografi")
+            
+        with tab2:
+            tablo_goster("Serviks")
+            
+        with tab3:
+            tablo_goster("Kolorektal")
+
     except Exception as e:
-        st.error(f"Dosya okunurken bir hata oluştu. Lütfen doğru formatta bir dosya yüklediğinize emin olun. Hata: {e}")
+        st.error(f"Dosya okunurken bir hata oluştu. Hata: {e}")
 else:
     st.info("👈 Lütfen sol menüden analiz edilecek Excel dosyasını sisteme yükleyin.")
