@@ -7,42 +7,107 @@ from xhtml2pdf import pisa
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_data
-def load_data(file):
-    # 1. Başlık satırını otomatik bulma (Tip hatalarına karşı %100 güvenli yöntem)
-    df_temp = pd.read_excel(file, header=None, nrows=15)
-    header_idx = 1 
+def load_data(files):
+    tum_veriler = []
     
-    for i, row in df_temp.iterrows():
-        row_degerleri = [str(hücre).lower() for hücre in row.tolist()]
-        row_str = " ".join(row_degerleri)
+    for file in files:
+        xls = pd.ExcelFile(file)
         
-        if "birim" in row_str and "oran" in row_str:
-            header_idx = i
-            break
+        # YENİ FORMAT KONTROLÜ (Ocak 2026 ve Sonrası - Uzun Format)
+        if 'Birim Bazında' in xls.sheet_names:
+            df_test = pd.read_excel(xls, sheet_name='Birim Bazında', nrows=5)
+            # Eğer 'Kronik Hastalik' kolonu varsa bu yeni formattır
+            if any('kronik hastalik' in str(c).lower().replace('ı', 'i') for c in df_test.columns):
+                df_raw = pd.read_excel(xls, sheet_name='Birim Bazında')
+                df_raw.columns = [str(c).strip().lower().replace('ı', 'i') for c in df_raw.columns]
+                
+                # Uzun formatı geniş formata (Pivot) çeviriyoruz
+                df_pivot = df_raw.pivot_table(
+                    index=['birim adi'], 
+                    columns='kronik hastalik', 
+                    values=['aylik gereken', 'yapilan'],
+                    aggfunc='sum'
+                ).reset_index()
+                
+                # Kolon isimlerini birleştirip düzleştiriyoruz
+                df_pivot.columns = ['_'.join(col).strip('_') for col in df_pivot.columns.values]
+                
+                temp_df = pd.DataFrame()
+                temp_df['Birim Adı'] = df_pivot['birim adi']
+                temp_df['Birim ID'] = temp_df['Birim Adı'].str.extract(r'(\d+)\s+Nolu').fillna("Bilinmiyor")
+                
+                # İlgili kolonları kelime aramasıyla eşleştirme
+                def get_col(df, keyword, val_type):
+                    for c in df.columns:
+                        if val_type in c.lower() and keyword.lower() in c.lower():
+                            return pd.to_numeric(df[c], errors='coerce').fillna(0)
+                    return pd.Series([0]*len(df))
+                
+                temp_df['Mamografi Gereken'] = get_col(df_pivot, 'mamograf', 'gereken')
+                temp_df['Mamografi Yapılan'] = get_col(df_pivot, 'mamograf', 'yapilan')
+                
+                temp_df['Serviks Gereken'] = get_col(df_pivot, 'serv', 'gereken')
+                temp_df['Serviks Yapılan'] = get_col(df_pivot, 'serv', 'yapilan')
+                
+                temp_df['Kolorektal Gereken'] = get_col(df_pivot, 'kolorek', 'gereken')
+                temp_df['Kolorektal Yapılan'] = get_col(df_pivot, 'kolorek', 'yapilan')
+                
+                tum_veriler.append(temp_df)
+                continue # Bu dosya bitti, diğerine geç
+                
+        # ESKİ FORMAT KONTROLÜ (Haziran 2026 Öncesi - Geniş Format)
+        df_temp = pd.read_excel(file, header=None, nrows=15)
+        header_idx = 1 
+        for i, row in df_temp.iterrows():
+            row_str = " ".join([str(h).lower() for h in row.tolist()])
+            if "birim" in row_str and "oran" in row_str:
+                header_idx = i
+                break
+                
+        df_old = pd.read_excel(file, header=header_idx)
+        df_old.columns = [str(c).strip() for c in df_old.columns]
+        
+        sutun_degisiklikleri = {}
+        for col in df_old.columns:
+            if col.lower() == "birim adi": sutun_degisiklikleri[col] = "Birim Adı"
+            elif col.lower() == "birim id": sutun_degisiklikleri[col] = "Birim ID"
+        if sutun_degisiklikleri:
+            df_old = df_old.rename(columns=sutun_degisiklikleri)
             
-    df = pd.read_excel(file, header=header_idx)
-    
-    # 2. Sütun isimlerindeki görünmez boşlukları temizleme
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    # 3. İsim farklılıklarını tolere etme
-    sutun_degisiklikleri = {}
-    for col in df.columns:
-        if col.lower() == "birim adi": sutun_degisiklikleri[col] = "Birim Adı"
-        elif col.lower() == "birim id": sutun_degisiklikleri[col] = "Birim ID"
-    
-    if sutun_degisiklikleri:
-        df = df.rename(columns=sutun_degisiklikleri)
+        df_old = df_old.rename(columns={
+            'Birim Id': 'Birim ID',
+            'Gereken Tarama': 'Mamografi Gereken', 'Oran(%)': 'Mamografi Oranı',
+            'Gereken Tarama.1': 'Serviks Gereken', 'Oran(%).1': 'Serviks Oranı',
+            'Gereken Tarama.2': 'Kolorektal Gereken', 'Oran(%).2': 'Kolorektal Oranı'
+        })
         
-    df = df.rename(columns={
-        'Birim Id': 'Birim ID',
-        'Gereken Tarama': 'Mamografi Gereken', 'Oran(%)': 'Mamografi Oranı',
-        'Gereken Tarama.1': 'Serviks Gereken', 'Oran(%).1': 'Serviks Oranı',
-        'Gereken Tarama.2': 'Kolorektal Gereken', 'Oran(%).2': 'Kolorektal Oranı'
-    })
+        # Eski formattan "Yapılan" verisini geri hesaplayıp oluşturma
+        for t in ['Mamografi', 'Serviks', 'Kolorektal']:
+            gereken = pd.to_numeric(df_old[f'{t} Gereken'], errors='coerce').fillna(0)
+            oran = pd.to_numeric(df_old[f'{t} Oranı'], errors='coerce').fillna(0)
+            df_old[f'{t} Gereken'] = gereken
+            df_old[f'{t} Yapılan'] = (oran * gereken / 100).round()
+            
+        tum_veriler.append(df_old[['Birim Adı', 'Birim ID', 'Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']])
+
+    # BİRDEN FAZLA AY YÜKLENDİYSE BİRLEŞTİR VE TOPLA (KÜMÜLATİF)
+    combined_df = pd.concat(tum_veriler, ignore_index=True)
     
-    df = df.fillna(0)
+    agg_funcs = {
+        'Birim ID': 'first',
+        'Mamografi Gereken': 'sum', 'Mamografi Yapılan': 'sum',
+        'Serviks Gereken': 'sum', 'Serviks Yapılan': 'sum',
+        'Kolorektal Gereken': 'sum', 'Kolorektal Yapılan': 'sum',
+    }
     
+    # Aynı isimli AHB'lerin aylık rakamlarını topluyoruz
+    final_df = combined_df.groupby('Birim Adı').agg(agg_funcs).reset_index()
+    
+    # Toplamlar üzerinden gerçek, nihai oranları hesaplıyoruz
+    for t in ['Mamografi', 'Serviks', 'Kolorektal']:
+        final_df[f'{t} Oranı'] = (final_df[f'{t} Yapılan'] / final_df[f'{t} Gereken'] * 100).fillna(0)
+    
+    # İlçe Tespiti
     districts = [
         "Adalar", "Arnavutköy", "Ataşehir", "Avcılar", "Bağcılar", "Bahçelievler", 
         "Bakırköy", "Başakşehir", "Bayrampaşa", "Beşiktaş", "Beykoz", "Beylikdüzü", 
@@ -62,20 +127,9 @@ def load_data(file):
             return "Eyüpsultan"
         return "Diğer/Kurum Tabiplikleri"
 
-    df['İlçe'] = df['Birim Adı'].apply(get_district)
+    final_df['İlçe'] = final_df['Birim Adı'].apply(get_district)
     
-    df['Mamografi Oranı'] = pd.to_numeric(df['Mamografi Oranı'], errors='coerce').fillna(0)
-    df['Mamografi Gereken'] = pd.to_numeric(df['Mamografi Gereken'], errors='coerce').fillna(0)
-    df['Serviks Oranı'] = pd.to_numeric(df['Serviks Oranı'], errors='coerce').fillna(0)
-    df['Serviks Gereken'] = pd.to_numeric(df['Serviks Gereken'], errors='coerce').fillna(0)
-    df['Kolorektal Oranı'] = pd.to_numeric(df['Kolorektal Oranı'], errors='coerce').fillna(0)
-    df['Kolorektal Gereken'] = pd.to_numeric(df['Kolorektal Gereken'], errors='coerce').fillna(0)
-    
-    df['Mamografi Yapılan'] = (df['Mamografi Oranı'] * df['Mamografi Gereken'] / 100).round()
-    df['Serviks Yapılan'] = (df['Serviks Oranı'] * df['Serviks Gereken'] / 100).round()
-    df['Kolorektal Yapılan'] = (df['Kolorektal Oranı'] * df['Kolorektal Gereken'] / 100).round()
-    
-    return df
+    return final_df
 
 @st.cache_data
 def get_excel(df):
@@ -112,15 +166,15 @@ def get_pdf(df, title):
 st.title("📊 KAN-TAR Analiz Sistemi")
 
 st.sidebar.header("1. Veri Yükleme")
-yuklenen_dosya = st.sidebar.file_uploader("KAN-TAR Excel Dosyasını Yükleyin", type=["xlsx", "xls"])
+# YENİ: accept_multiple_files=True eklendi. Artık aynı anda birden fazla ay Excel'i seçilebilir.
+yuklenen_dosyalar = st.sidebar.file_uploader("KAN-TAR Excel Dosyalarını Yükleyin (Çoklu Seçim Yapabilirsiniz)", type=["xlsx", "xls"], accept_multiple_files=True)
 
-if yuklenen_dosya is not None:
+if yuklenen_dosyalar: # Liste boş değilse
     try:
-        df = load_data(yuklenen_dosya)
+        df = load_data(yuklenen_dosyalar)
         
         st.sidebar.header("2. Filtreleme Seçenekleri")
         
-        # Filtreleri bir Form içine alıyoruz (Sadece butona basıldığında çalışması için)
         with st.sidebar.form(key="filtre_form"):
             ilce_secenekleri = ["Tüm İlçeler"] + sorted(df['İlçe'].unique().tolist())
             secilen_ilce = st.selectbox("İlçe Seçin", ilce_secenekleri)
@@ -133,7 +187,6 @@ if yuklenen_dosya is not None:
                 min_value=0, max_value=100, value=(0, 100), step=1
             )
             
-            # Çalıştır butonu
             calistir_butonu = st.form_submit_button(label="Çalıştır 🚀")
 
         tab1, tab2, tab3 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması"])
@@ -150,7 +203,6 @@ if yuklenen_dosya is not None:
             gereken_kolon = f"{tarama_turu} Gereken"
             yapilan_kolon = f"{tarama_turu} Yapılan"
             
-            # --- ÜST TABLO: İLÇE SIRALAMASI (Filtresiz Toplam Başarı) ---
             st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
             ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
             ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
@@ -174,7 +226,6 @@ if yuklenen_dosya is not None:
             
             st.markdown("---")
 
-            # --- ALT TABLO: BİRİM SIRALAMASI (Slider Oranına Göre Filtrelenmiş) ---
             st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
             
             birim_df_aralikli = filtrelenmis_df[
@@ -211,6 +262,6 @@ if yuklenen_dosya is not None:
             tablo_goster("Kolorektal")
 
     except Exception as e:
-        st.error(f"Dosya okunurken bir hata oluştu. Lütfen dosyanızın HSYS standart KAN-TAR çıktısı olduğundan emin olun. Hata detayı: {e}")
+        st.error(f"Dosyalar okunurken bir hata oluştu. Hata detayı: {e}")
 else:
-    st.info("👈 Lütfen sol menüden analiz edilecek Excel dosyasını sisteme yükleyin.")
+    st.info("👈 Lütfen sol menüden analiz edilecek Excel dosyasını (veya dosyalarını) sisteme yükleyin.")
