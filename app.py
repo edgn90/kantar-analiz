@@ -1,10 +1,32 @@
 import streamlit as st
 import pandas as pd
 import io
+import os
+import urllib.request
 from xhtml2pdf import pisa
 
 # Sayfa Ayarları
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
+
+@st.cache_resource
+def get_fonts():
+    # Türkçe karakterleri destekleyen açık kaynaklı fontları otomatik indir
+    regular = "DejaVuSans.ttf"
+    bold = "DejaVuSans-Bold.ttf"
+    
+    if not os.path.exists(regular):
+        try:
+            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", regular)
+        except Exception:
+            pass
+            
+    if not os.path.exists(bold):
+        try:
+            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf", bold)
+        except Exception:
+            pass
+            
+    return os.path.abspath(regular).replace('\\', '/'), os.path.abspath(bold).replace('\\', '/')
 
 @st.cache_data
 def load_asm_mapping():
@@ -132,13 +154,23 @@ def get_excel(df):
 
 @st.cache_data
 def get_pdf(df, title):
+    reg_font, bold_font = get_fonts()
     html_content = f"""
     <html>
     <head>
     <meta charset="utf-8">
     <style>
+        @font-face {{
+            font-family: 'DejaVu';
+            src: url('{reg_font}');
+        }}
+        @font-face {{
+            font-family: 'DejaVu';
+            src: url('{bold_font}');
+            font-weight: bold;
+        }}
         @page {{ size: A4; margin: 1cm; }}
-        body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10px; }}
+        body {{ font-family: 'DejaVu', Helvetica, Arial, sans-serif; font-size: 10px; }}
         h2 {{ text-align: center; color: #333; }}
         table {{ border-collapse: collapse; width: 100%; }}
         th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; }}
@@ -155,11 +187,10 @@ def get_pdf(df, title):
     pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
-# YENİ: İlçe Özel Raporu Üretici Fonksiyon
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
+    reg_font, bold_font = get_fonts()
     aylar_str = ", ".join(secilen_aylar)
     
-    # Tüm ilçelerin genel durumunu ve sıralamasını hesapla
     ilce_grup = df.groupby('İlçe')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
         ilce_grup[f'{t} Oranı'] = (ilce_grup[f'{t} Yapılan'] / ilce_grup[f'{t} Gereken'] * 100).fillna(0)
@@ -168,7 +199,6 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     ilce_ozet = ilce_grup[ilce_grup['İlçe'] == secilen_ilce].iloc[0]
     ilce_detay = df[df['İlçe'] == secilen_ilce]
     
-    # %50 Altı Kırmızı Uyarı Formatlayıcı
     def format_oran(oran):
         if pd.isna(oran):
             oran = 0
@@ -181,8 +211,17 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     <head>
     <meta charset="utf-8">
     <style>
+        @font-face {{
+            font-family: 'DejaVu';
+            src: url('{reg_font}');
+        }}
+        @font-face {{
+            font-family: 'DejaVu';
+            src: url('{bold_font}');
+            font-weight: bold;
+        }}
         @page {{ size: A4; margin: 1cm; }}
-        body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
+        body {{ font-family: 'DejaVu', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
         h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; }}
         .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; }}
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; }}
@@ -308,7 +347,6 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            # YENİ: 4. Sekme (İlçe Raporu) Eklendi
             tab1, tab2, tab3, tab4 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması", "📑 İlçe Bazlı Rapor"])
 
             def tablo_goster(tarama_turu):
@@ -398,7 +436,6 @@ if yuklenen_dosyalar:
                 with col6:
                     st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
-            # İlk 3 sekmeyi çalıştır
             with tab1:
                 tablo_goster("Mamografi")
             with tab2:
@@ -406,7 +443,6 @@ if yuklenen_dosyalar:
             with tab3:
                 tablo_goster("Kolorektal")
                 
-            # YENİ: 4. Sekmenin İçeriği
             with tab4:
                 if secilen_ilce == "Tüm İlçeler":
                     st.info("👈 İlçe bazlı PDF raporu oluşturabilmek için lütfen sol menüden belirli bir ilçeyi seçin ve Çalıştır'a basın.")
