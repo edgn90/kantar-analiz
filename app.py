@@ -7,11 +7,22 @@ from xhtml2pdf import pisa
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_data
-def load_data(files):
+def load_asm_mapping():
+    try:
+        # Arka plandaki eşleştirme dosyasını (repo içinden) okuyoruz
+        df_map = pd.concat(pd.read_excel("ASM_AHB_Eslestirme.xlsx", sheet_name=None).values(), ignore_index=True)
+        # AHB isimlerini standardize edip (küçük harf, boşluksuz) ASM'ye bağlayan sözlüğü oluşturuyoruz
+        mapping = dict(zip(df_map['AHB BİRİMİ'].astype(str).str.strip().str.lower(), df_map['ASM'].astype(str).str.strip()))
+        return mapping
+    except Exception:
+        return None
+
+@st.cache_data
+def load_data(files, asm_mapping):
     tum_veriler = []
     
     for file in files:
-        dosya_adi = file.name # Dosya ismini (ör. "Ocak.xlsx") Ay etiketi olarak kullanacağız
+        dosya_adi = file.name
         xls = pd.ExcelFile(file)
         
         # YENİ FORMAT KONTROLÜ (Ocak 2026 ve Sonrası)
@@ -87,9 +98,15 @@ def load_data(files):
         df_old_final['Dosya (Ay)'] = dosya_adi
         tum_veriler.append(df_old_final)
 
-    # TÜM VERİLERİ (FİLTRELENMEMİŞ HAM HALİYLE) BİRLEŞTİR
+    # TÜM AYLARI BİRLEŞTİR
     combined_df = pd.concat(tum_veriler, ignore_index=True)
     
+    # ASM EŞLEŞTİRMESİ
+    if asm_mapping:
+        combined_df['ASM Adı'] = combined_df['Birim Adı'].astype(str).str.strip().str.lower().map(asm_mapping).fillna("Bilinmeyen/Eksik ASM")
+    else:
+        combined_df['ASM Adı'] = "Sistemde ASM_AHB_Eslestirme.xlsx bulunamadı"
+
     # İlçe Tespiti
     districts = [
         "Adalar", "Arnavutköy", "Ataşehir", "Avcılar", "Bağcılar", "Bahçelievler", 
@@ -147,31 +164,30 @@ def get_pdf(df, title):
 
 st.title("📊 KAN-TAR Analiz Sistemi")
 
+# Arka plandaki ASM sözlüğünü belleğe yükle
+asm_mapping = load_asm_mapping()
+
 st.sidebar.header("1. Veri Yükleme")
 yuklenen_dosyalar = st.sidebar.file_uploader("KAN-TAR Excel Dosyalarını Yükleyin", type=["xlsx", "xls"], accept_multiple_files=True)
 
 if yuklenen_dosyalar:
     try:
-        # Ham veriyi çekiyoruz (henüz toplanmadı)
-        df_ham = load_data(yuklenen_dosyalar)
+        df_ham = load_data(yuklenen_dosyalar, asm_mapping)
         
         st.sidebar.header("2. Filtreleme Seçenekleri")
         
         with st.sidebar.form(key="filtre_form"):
-            # Ay (Dosya) Filtresi
             ay_secenekleri = df_ham['Dosya (Ay)'].unique().tolist()
-            secilen_aylar = st.multiselect("Analiz Edilecek Ayları (Dosyaları) Seçin", options=ay_secenekleri, default=ay_secenekleri)
+            secilen_aylar = st.multiselect("Analiz Edilecek Ayları Seçin", options=ay_secenekleri, default=ay_secenekleri)
             
             st.markdown("---")
             
-            # İlçe Filtresi
             ilce_secenekleri = ["Tüm İlçeler"] + sorted(df_ham['İlçe'].unique().tolist())
             secilen_ilce = st.selectbox("İlçe Seçin", ilce_secenekleri)
             
             st.markdown("---")
             
-            # Oran Filtresi
-            st.subheader("3. Oran Filtresi (Birimler İçin)")
+            st.subheader("3. Oran Filtresi (ASM ve Birimler İçin)")
             min_oran, max_oran = st.slider(
                 "Gösterilecek Başarı Oranı Aralığı (%)",
                 min_value=0, max_value=100, value=(0, 100), step=1
@@ -179,26 +195,22 @@ if yuklenen_dosyalar:
             
             calistir_butonu = st.form_submit_button(label="Çalıştır 🚀")
 
-        # Eğer en az 1 ay seçilmişse işlemlere devam et
         if secilen_aylar:
-            # 1. Seçili aylara göre veriyi süz
             df_filtrelenmis_ay = df_ham[df_ham['Dosya (Ay)'].isin(secilen_aylar)]
             
-            # 2. Süzülen ayların rakamlarını toplayıp birleştir
             agg_funcs = {
                 'Birim ID': 'first',
                 'İlçe': 'first',
+                'ASM Adı': 'first',
                 'Mamografi Gereken': 'sum', 'Mamografi Yapılan': 'sum',
                 'Serviks Gereken': 'sum', 'Serviks Yapılan': 'sum',
                 'Kolorektal Gereken': 'sum', 'Kolorektal Yapılan': 'sum',
             }
             df = df_filtrelenmis_ay.groupby('Birim Adı').agg(agg_funcs).reset_index()
             
-            # 3. Kümülatif toplamlar üzerinden gerçek başarı oranlarını yeniden hesapla
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            # Sekmeleri oluştur
             tab1, tab2, tab3 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması"])
 
             def tablo_goster(tarama_turu):
@@ -213,6 +225,7 @@ if yuklenen_dosyalar:
                 gereken_kolon = f"{tarama_turu} Gereken"
                 yapilan_kolon = f"{tarama_turu} Yapılan"
                 
+                # --- 1. İLÇE TABLOSU ---
                 st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
                 ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
                 ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
@@ -236,7 +249,35 @@ if yuklenen_dosyalar:
                 
                 st.markdown("---")
 
-                st.subheader(f"🏥 Birim Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
+                # --- 2. ASM TABLOSU ---
+                st.subheader(f"🏥 ASM (Aile Sağlığı Merkezi) Başarı Sıralaması ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
+                
+                asm_grup = filtrelenmis_df.groupby(['İlçe', 'ASM Adı'])[[gereken_kolon, yapilan_kolon]].sum().reset_index()
+                asm_grup[hedef_kolon] = (asm_grup[yapilan_kolon] / asm_grup[gereken_kolon] * 100).fillna(0)
+                
+                asm_grup_aralikli = asm_grup[(asm_grup[hedef_kolon] >= min_oran) & (asm_grup[hedef_kolon] <= max_oran)]
+                asm_grup_sirali = asm_grup_aralikli.sort_values(by=hedef_kolon, ascending=False).reset_index(drop=True)
+                asm_grup_sirali.index += 1
+                
+                asm_grup_pdf = asm_grup_sirali.copy()
+                asm_grup_pdf[hedef_kolon] = asm_grup_pdf[hedef_kolon].apply(lambda x: f"%{x:.2f}")
+                
+                st.dataframe(
+                    asm_grup_sirali.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"})
+                    .background_gradient(subset=[hedef_kolon], cmap='Blues'),
+                    use_container_width=True
+                )
+                
+                col3, col4 = st.columns(2)
+                with col3:
+                    st.download_button("📥 Excel İndir (ASM)", data=get_excel(asm_grup_sirali), file_name=f"{tarama_turu}_ASM_Siralama.xlsx", key=f"{tarama_turu}_asm_ex")
+                with col4:
+                    st.download_button("📄 PDF İndir (ASM)", data=get_pdf(asm_grup_pdf, f"{ilce_baslik} - {tarama_turu} ASM Siralamasi"), file_name=f"{tarama_turu}_ASM_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_asm_pdf")
+                
+                st.markdown("---")
+
+                # --- 3. BİRİM TABLOSU ---
+                st.subheader(f"🩺 Birim (AHB) Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
                 
                 birim_df_aralikli = filtrelenmis_df[
                     (filtrelenmis_df[hedef_kolon] >= min_oran) & 
@@ -246,7 +287,7 @@ if yuklenen_dosyalar:
                 birim_df_sirali = birim_df_aralikli.sort_values(by=hedef_kolon, ascending=False)
                 
                 gosterilecek_df = birim_df_sirali[[
-                    'İlçe', 'Birim Adı', 'Birim ID', gereken_kolon, yapilan_kolon, hedef_kolon
+                    'İlçe', 'ASM Adı', 'Birim Adı', 'Birim ID', gereken_kolon, yapilan_kolon, hedef_kolon
                 ]].reset_index(drop=True)
                 gosterilecek_df.index += 1
                 
@@ -258,10 +299,10 @@ if yuklenen_dosyalar:
                     use_container_width=True
                 )
                 
-                col3, col4 = st.columns(2)
-                with col3:
+                col5, col6 = st.columns(2)
+                with col5:
                     st.download_button("📥 Excel İndir (Birim)", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
-                with col4:
+                with col6:
                     st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
             with tab1:
