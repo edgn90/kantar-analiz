@@ -9,9 +9,7 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 @st.cache_data
 def load_asm_mapping():
     try:
-        # Arka plandaki eşleştirme dosyasını (repo içinden) okuyoruz
         df_map = pd.concat(pd.read_excel("ASM_AHB_Eslestirme.xlsx", sheet_name=None).values(), ignore_index=True)
-        # AHB isimlerini standardize edip (küçük harf, boşluksuz) ASM'ye bağlayan sözlüğü oluşturuyoruz
         mapping = dict(zip(df_map['AHB BİRİMİ'].astype(str).str.strip().str.lower(), df_map['ASM'].astype(str).str.strip()))
         return mapping
     except Exception:
@@ -25,7 +23,6 @@ def load_data(files, asm_mapping):
         dosya_adi = file.name
         xls = pd.ExcelFile(file)
         
-        # YENİ FORMAT KONTROLÜ (Ocak 2026 ve Sonrası)
         if 'Birim Bazında' in xls.sheet_names:
             df_test = pd.read_excel(xls, sheet_name='Birim Bazında', nrows=5)
             if any('kronik hastalik' in str(c).lower().replace('ı', 'i') for c in df_test.columns):
@@ -62,7 +59,6 @@ def load_data(files, asm_mapping):
                 tum_veriler.append(temp_df)
                 continue
                 
-        # ESKİ FORMAT KONTROLÜ (Haziran 2026 Öncesi)
         df_temp = pd.read_excel(file, header=None, nrows=15)
         header_idx = 1 
         for i, row in df_temp.iterrows():
@@ -98,16 +94,13 @@ def load_data(files, asm_mapping):
         df_old_final['Dosya (Ay)'] = dosya_adi
         tum_veriler.append(df_old_final)
 
-    # TÜM AYLARI BİRLEŞTİR
     combined_df = pd.concat(tum_veriler, ignore_index=True)
     
-    # ASM EŞLEŞTİRMESİ
     if asm_mapping:
         combined_df['ASM Adı'] = combined_df['Birim Adı'].astype(str).str.strip().str.lower().map(asm_mapping).fillna("Bilinmeyen/Eksik ASM")
     else:
         combined_df['ASM Adı'] = "Sistemde ASM_AHB_Eslestirme.xlsx bulunamadı"
 
-    # İlçe Tespiti
     districts = [
         "Adalar", "Arnavutköy", "Ataşehir", "Avcılar", "Bağcılar", "Bahçelievler", 
         "Bakırköy", "Başakşehir", "Bayrampaşa", "Beşiktaş", "Beykoz", "Beylikdüzü", 
@@ -162,9 +155,113 @@ def get_pdf(df, title):
     pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
+# YENİ: İlçe Özel Raporu Üretici Fonksiyon
+def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
+    aylar_str = ", ".join(secilen_aylar)
+    
+    # Tüm ilçelerin genel durumunu ve sıralamasını hesapla
+    ilce_grup = df.groupby('İlçe')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
+    for t in ['Mamografi', 'Serviks', 'Kolorektal']:
+        ilce_grup[f'{t} Oranı'] = (ilce_grup[f'{t} Yapılan'] / ilce_grup[f'{t} Gereken'] * 100).fillna(0)
+        ilce_grup[f'{t} Sıra'] = ilce_grup[f'{t} Oranı'].rank(ascending=False, method='min').astype(int)
+        
+    ilce_ozet = ilce_grup[ilce_grup['İlçe'] == secilen_ilce].iloc[0]
+    ilce_detay = df[df['İlçe'] == secilen_ilce]
+    
+    # %50 Altı Kırmızı Uyarı Formatlayıcı
+    def format_oran(oran):
+        if pd.isna(oran):
+            oran = 0
+        if oran < 50.0:
+            return f"<span style='color: red; font-weight: bold;'>%{oran:.2f} (Uyarı)</span>"
+        return f"%{oran:.2f}"
+
+    html_content = f"""
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <style>
+        @page {{ size: A4; margin: 1cm; }}
+        body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
+        h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; }}
+        .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; }}
+        h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; }}
+        h3 {{ color: #16a085; font-size: 11px; margin-top: 10px; margin-bottom: 5px; }}
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 5px; }}
+        th, td {{ border: 1px solid #bdc3c7; padding: 4px; font-size: 9px; }}
+        th {{ background-color: #ecf0f1; font-weight: bold; text-align: center; }}
+        td {{ text-align: center; }}
+        .left-align {{ text-align: left; }}
+        .summary-table th {{ background-color: #34495e; color: white; }}
+        .summary-table td {{ font-size: 11px; padding: 8px; }}
+    </style>
+    </head>
+    <body>
+        <h1>{secilen_ilce} İlçesi KAN-TAR Değerlendirme Raporu</h1>
+        <div class="header-info"><b>Kapsanan Aylar:</b> {aylar_str}</div>
+        
+        <h2>1. İlçe Genel Durumu ve İstanbul Sıralaması</h2>
+        <table class="summary-table">
+            <tr>
+                <th>Mamografi Taraması</th>
+                <th>Serviks Taraması</th>
+                <th>Kolorektal Taraması</th>
+            </tr>
+            <tr>
+                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Mamografi Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Serviks Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Kolorektal Sıra']}.</span></td>
+            </tr>
+        </table>
+        
+        <h2>2. ASM ve Birim (AHB) Bazlı Kırılımlar</h2>
+    """
+    
+    asm_grup = ilce_detay.groupby('ASM Adı')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
+    asm_grup = asm_grup.sort_values(by='ASM Adı')
+    
+    for _, asm_row in asm_grup.iterrows():
+        asm_adi = asm_row['ASM Adı']
+        m_oran = (asm_row['Mamografi Yapılan'] / asm_row['Mamografi Gereken'] * 100) if asm_row['Mamografi Gereken'] > 0 else 0
+        s_oran = (asm_row['Serviks Yapılan'] / asm_row['Serviks Gereken'] * 100) if asm_row['Serviks Gereken'] > 0 else 0
+        k_oran = (asm_row['Kolorektal Yapılan'] / asm_row['Kolorektal Gereken'] * 100) if asm_row['Kolorektal Gereken'] > 0 else 0
+        
+        html_content += f"<h3>🏥 {asm_adi}</h3>"
+        html_content += f"""
+        <table style="background-color: #f8f9fa;">
+            <tr>
+                <td width="33%"><b>ASM Ort. Mamografi:</b> {format_oran(m_oran)}</td>
+                <td width="33%"><b>ASM Ort. Serviks:</b> {format_oran(s_oran)}</td>
+                <td width="33%"><b>ASM Ort. Kolorektal:</b> {format_oran(k_oran)}</td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <th class="left-align" width="40%">Birim Adı</th>
+                <th width="20%">Mamografi (%)</th>
+                <th width="20%">Serviks (%)</th>
+                <th width="20%">Kolorektal (%)</th>
+            </tr>
+        """
+        
+        asm_birimler = ilce_detay[ilce_detay['ASM Adı'] == asm_adi].sort_values(by='Birim Adı')
+        for _, birim_row in asm_birimler.iterrows():
+            html_content += "<tr>"
+            html_content += f"<td class='left-align'>{birim_row['Birim Adı']}</td>"
+            html_content += f"<td>{format_oran(birim_row['Mamografi Oranı'])}</td>"
+            html_content += f"<td>{format_oran(birim_row['Serviks Oranı'])}</td>"
+            html_content += f"<td>{format_oran(birim_row['Kolorektal Oranı'])}</td>"
+            html_content += "</tr>"
+        html_content += "</table>"
+        
+    html_content += "</body></html>"
+    
+    pdf_buffer = io.BytesIO()
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
+    return pdf_buffer.getvalue()
+
 st.title("📊 KAN-TAR Analiz Sistemi")
 
-# Arka plandaki ASM sözlüğünü belleğe yükle
 asm_mapping = load_asm_mapping()
 
 st.sidebar.header("1. Veri Yükleme")
@@ -211,7 +308,8 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            tab1, tab2, tab3 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması"])
+            # YENİ: 4. Sekme (İlçe Raporu) Eklendi
+            tab1, tab2, tab3, tab4 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması", "📑 İlçe Bazlı Rapor"])
 
             def tablo_goster(tarama_turu):
                 if secilen_ilce != "Tüm İlçeler":
@@ -225,7 +323,6 @@ if yuklenen_dosyalar:
                 gereken_kolon = f"{tarama_turu} Gereken"
                 yapilan_kolon = f"{tarama_turu} Yapılan"
                 
-                # --- 1. İLÇE TABLOSU ---
                 st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
                 ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
                 ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
@@ -249,9 +346,7 @@ if yuklenen_dosyalar:
                 
                 st.markdown("---")
 
-                # --- 2. ASM TABLOSU ---
                 st.subheader(f"🏥 ASM (Aile Sağlığı Merkezi) Başarı Sıralaması ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
-                
                 asm_grup = filtrelenmis_df.groupby(['İlçe', 'ASM Adı'])[[gereken_kolon, yapilan_kolon]].sum().reset_index()
                 asm_grup[hedef_kolon] = (asm_grup[yapilan_kolon] / asm_grup[gereken_kolon] * 100).fillna(0)
                 
@@ -276,9 +371,7 @@ if yuklenen_dosyalar:
                 
                 st.markdown("---")
 
-                # --- 3. BİRİM TABLOSU ---
                 st.subheader(f"🩺 Birim (AHB) Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
-                
                 birim_df_aralikli = filtrelenmis_df[
                     (filtrelenmis_df[hedef_kolon] >= min_oran) & 
                     (filtrelenmis_df[hedef_kolon] <= max_oran)
@@ -305,12 +398,35 @@ if yuklenen_dosyalar:
                 with col6:
                     st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
+            # İlk 3 sekmeyi çalıştır
             with tab1:
                 tablo_goster("Mamografi")
             with tab2:
                 tablo_goster("Serviks")
             with tab3:
                 tablo_goster("Kolorektal")
+                
+            # YENİ: 4. Sekmenin İçeriği
+            with tab4:
+                if secilen_ilce == "Tüm İlçeler":
+                    st.info("👈 İlçe bazlı PDF raporu oluşturabilmek için lütfen sol menüden belirli bir ilçeyi seçin ve Çalıştır'a basın.")
+                else:
+                    st.subheader(f"📑 {secilen_ilce} İlçesi Özel Değerlendirme Raporu")
+                    st.markdown(f"Bu rapor **{', '.join(secilen_aylar)}** dönemlerini kapsamaktadır.")
+                    st.markdown("Rapor İçeriği:")
+                    st.markdown("- İlçenin İstanbul genelindeki başarı sıralaması ve 3 Kanser türündeki özet oranı")
+                    st.markdown("- İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları")
+                    st.markdown("- Her ASM'nin altına hiyerarşik olarak dizilmiş Aile Hekimliği Birim (AHB) detay oranları")
+                    st.markdown("- **%50'nin altında kalan oranlar için kırmızı uyarı vurgusu** ⚠️")
+                    
+                    pdf_data = get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar)
+                    
+                    st.download_button(
+                        label=f"📥 {secilen_ilce} Raporunu İndir (PDF)",
+                        data=pdf_data,
+                        file_name=f"{secilen_ilce}_Ilce_KANTAR_Raporu.pdf",
+                        mime="application/pdf"
+                    )
         else:
             st.warning("Lütfen sol menüden analiz edilecek en az bir ay (dosya) seçin.")
 
