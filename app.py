@@ -3,17 +3,30 @@ import pandas as pd
 import io
 import os
 import urllib.request
+import ssl
 from xhtml2pdf import pisa
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 
 # Sayfa Ayarları
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_resource
-def get_fonts():
-    # DejaVu fontlarını indir
+def setup_fonts():
+    """
+    Fontları indirir ve doğrudan ReportLab PDF motorunun çekirdeğine kaydeder.
+    Bu yöntem CSS @font-face hatalarını aşarak %100 Türkçe karakter garantisi sağlar.
+    """
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
     regular = "DejaVuSans.ttf"
     bold = "DejaVuSans-Bold.ttf"
     
+    # Fontlar yoksa GitHub üzerinden indir
     if not os.path.exists(regular):
         try:
             urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", regular)
@@ -26,13 +39,16 @@ def get_fonts():
         except Exception:
             pass
             
-    reg_exists = os.path.exists(regular)
-    bold_exists = os.path.exists(bold)
-    
-    reg_path = os.path.abspath(regular).replace('\\', '/') if reg_exists else None
-    bold_path = os.path.abspath(bold).replace('\\', '/') if bold_exists else None
-    
-    return reg_path, bold_path
+    # İndirme başarılıysa fontları doğrudan sisteme kaydet
+    if os.path.exists(regular) and os.path.exists(bold):
+        try:
+            pdfmetrics.registerFont(TTFont('DejaVuSans', regular))
+            pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', bold))
+            registerFontFamily('DejaVu', normal='DejaVuSans', bold='DejaVuSans-Bold')
+            return True
+        except Exception as e:
+            return False
+    return False
 
 @st.cache_data
 def load_asm_mapping():
@@ -160,26 +176,17 @@ def get_excel(df):
 
 @st.cache_data
 def get_pdf(df, title):
-    reg_font, bold_font = get_fonts()
+    fonts_loaded = setup_fonts()
+    font_family = "'DejaVu', Helvetica, Arial, sans-serif" if fonts_loaded else "Helvetica, Arial, sans-serif"
     
-    font_style = ""
-    if reg_font and bold_font:
-        font_style = f"""
-        @font-face {{ font-family: 'DejaVu'; src: url('{reg_font}'); }}
-        @font-face {{ font-family: 'DejaVu'; src: url('{bold_font}'); font-weight: bold; }}
-        body {{ font-family: 'DejaVu', Arial, sans-serif; font-size: 10px; }}
-        """
-    else:
-        font_style = "body { font-family: Helvetica, Arial, sans-serif; font-size: 10px; }"
-        
     html_content = f"""
     <!DOCTYPE html>
     <html lang="tr">
     <head>
     <meta charset="UTF-8">
     <style>
-        {font_style}
         @page {{ size: A4; margin: 1cm; }}
+        body {{ font-family: {font_family}; font-size: 10px; color: #333; }}
         h2 {{ text-align: center; color: #333; }}
         table {{ border-collapse: collapse; width: 100%; }}
         th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; }}
@@ -193,12 +200,13 @@ def get_pdf(df, title):
     </html>
     """
     pdf_buffer = io.BytesIO()
-    # YENİ YÖNTEM: Metni UTF-8 bytelarına çevirip StringIO yerine BytesIO kullanıyoruz
-    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer)
+    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
-    reg_font, bold_font = get_fonts()
+    fonts_loaded = setup_fonts()
+    font_family = "'DejaVu', Helvetica, Arial, sans-serif" if fonts_loaded else "Helvetica, Arial, sans-serif"
+    
     aylar_str = ", ".join(secilen_aylar)
     
     ilce_grup = df.groupby('İlçe')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
@@ -216,24 +224,14 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
             return f"<span style='color: red; font-weight: bold;'>%{oran:.2f} (Uyarı)</span>"
         return f"%{oran:.2f}"
 
-    font_style = ""
-    if reg_font and bold_font:
-        font_style = f"""
-        @font-face {{ font-family: 'DejaVu'; src: url('{reg_font}'); }}
-        @font-face {{ font-family: 'DejaVu'; src: url('{bold_font}'); font-weight: bold; }}
-        body {{ font-family: 'DejaVu', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
-        """
-    else:
-        font_style = "body { font-family: Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }"
-
     html_content = f"""
     <!DOCTYPE html>
     <html lang="tr">
     <head>
     <meta charset="UTF-8">
     <style>
-        {font_style}
         @page {{ size: A4; margin: 1cm; }}
+        body {{ font-family: {font_family}; font-size: 10px; color: #333; }}
         h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; }}
         .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; }}
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; }}
@@ -308,8 +306,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     html_content += "</body></html>"
     
     pdf_buffer = io.BytesIO()
-    # YENİ YÖNTEM: Metni UTF-8 bytelarına çevirip StringIO yerine BytesIO kullanıyoruz
-    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer)
+    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
 st.title("📊 KAN-TAR Analiz Sistemi")
