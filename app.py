@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import os
-import urllib.request
 from xhtml2pdf import pisa
 
 # Sayfa Ayarları
@@ -10,23 +9,16 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_resource
 def get_fonts():
-    # Türkçe karakterleri destekleyen açık kaynaklı fontları otomatik indir
-    regular = "DejaVuSans.ttf"
-    bold = "DejaVuSans-Bold.ttf"
+    # Linux (Streamlit Cloud) sistemlerinde varsayılan olarak bulunan, Türkçe karakterleri tam destekleyen FreeSans fontları
+    regular = "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
+    bold = "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
     
+    # Eğer sistem Linux değilse (örneğin kendi Windows bilgisayarınızda çalıştırıyorsanız) Windows fontlarını kullanır
     if not os.path.exists(regular):
-        try:
-            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", regular)
-        except Exception:
-            pass
-            
-    if not os.path.exists(bold):
-        try:
-            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf", bold)
-        except Exception:
-            pass
-            
-    return os.path.abspath(regular).replace('\\', '/'), os.path.abspath(bold).replace('\\', '/')
+        regular = "C:/Windows/Fonts/arial.ttf"
+        bold = "C:/Windows/Fonts/arialbd.ttf"
+        
+    return regular, bold
 
 @st.cache_data
 def load_asm_mapping():
@@ -156,22 +148,14 @@ def get_excel(df):
 def get_pdf(df, title):
     reg_font, bold_font = get_fonts()
     html_content = f"""
-    <!DOCTYPE html>
     <html>
     <head>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta charset="utf-8">
     <style>
-        @font-face {{
-            font-family: 'DejaVu';
-            src: url('{reg_font}');
-        }}
-        @font-face {{
-            font-family: 'DejaVu';
-            src: url('{bold_font}');
-            font-weight: bold;
-        }}
+        @font-face {{ font-family: 'TrFont'; src: url('{reg_font}'); }}
+        @font-face {{ font-family: 'TrFont'; src: url('{bold_font}'); font-weight: bold; }}
         @page {{ size: A4; margin: 1cm; }}
-        body {{ font-family: 'DejaVu', Helvetica, Arial, sans-serif; font-size: 10px; }}
+        body {{ font-family: 'TrFont', Helvetica, Arial, sans-serif; font-size: 10px; }}
         h2 {{ text-align: center; color: #333; }}
         table {{ border-collapse: collapse; width: 100%; }}
         th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; }}
@@ -185,7 +169,7 @@ def get_pdf(df, title):
     </html>
     """
     pdf_buffer = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
@@ -208,22 +192,14 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         return f"%{oran:.2f}"
 
     html_content = f"""
-    <!DOCTYPE html>
     <html>
     <head>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta charset="utf-8">
     <style>
-        @font-face {{
-            font-family: 'DejaVu';
-            src: url('{reg_font}');
-        }}
-        @font-face {{
-            font-family: 'DejaVu';
-            src: url('{bold_font}');
-            font-weight: bold;
-        }}
+        @font-face {{ font-family: 'TrFont'; src: url('{reg_font}'); }}
+        @font-face {{ font-family: 'TrFont'; src: url('{bold_font}'); font-weight: bold; }}
         @page {{ size: A4; margin: 1cm; }}
-        body {{ font-family: 'DejaVu', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
+        body {{ font-family: 'TrFont', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
         h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; }}
         .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; }}
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; }}
@@ -298,7 +274,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     html_content += "</body></html>"
     
     pdf_buffer = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
 st.title("📊 KAN-TAR Analiz Sistemi")
