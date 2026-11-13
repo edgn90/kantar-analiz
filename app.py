@@ -156,9 +156,10 @@ def get_excel(df):
 def get_pdf(df, title):
     reg_font, bold_font = get_fonts()
     html_content = f"""
+    <!DOCTYPE html>
     <html>
     <head>
-    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <style>
         @font-face {{
             font-family: 'DejaVu';
@@ -184,7 +185,7 @@ def get_pdf(df, title):
     </html>
     """
     pdf_buffer = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
@@ -207,9 +208,10 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         return f"%{oran:.2f}"
 
     html_content = f"""
+    <!DOCTYPE html>
     <html>
     <head>
-    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <style>
         @font-face {{
             font-family: 'DejaVu';
@@ -296,7 +298,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     html_content += "</body></html>"
     
     pdf_buffer = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
 st.title("📊 KAN-TAR Analiz Sistemi")
