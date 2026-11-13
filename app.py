@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import urllib.request
 from xhtml2pdf import pisa
 
 # Sayfa Ayarları
@@ -9,16 +10,31 @@ st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 @st.cache_resource
 def get_fonts():
-    # Linux (Streamlit Cloud) sistemlerinde varsayılan olarak bulunan, Türkçe karakterleri tam destekleyen FreeSans fontları
-    regular = "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
-    bold = "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+    # DejaVu fontlarını indir
+    regular = "DejaVuSans.ttf"
+    bold = "DejaVuSans-Bold.ttf"
     
-    # Eğer sistem Linux değilse (örneğin kendi Windows bilgisayarınızda çalıştırıyorsanız) Windows fontlarını kullanır
     if not os.path.exists(regular):
-        regular = "C:/Windows/Fonts/arial.ttf"
-        bold = "C:/Windows/Fonts/arialbd.ttf"
-        
-    return regular, bold
+        try:
+            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", regular)
+        except Exception:
+            pass
+            
+    if not os.path.exists(bold):
+        try:
+            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf", bold)
+        except Exception:
+            pass
+            
+    # Dosyaların indirilip indirilmediğini kontrol et
+    reg_exists = os.path.exists(regular)
+    bold_exists = os.path.exists(bold)
+    
+    # İndirme başarılıysa yollarını döndür, aksi halde None döndür
+    reg_path = os.path.abspath(regular).replace('\\', '/') if reg_exists else None
+    bold_path = os.path.abspath(bold).replace('\\', '/') if bold_exists else None
+    
+    return reg_path, bold_path
 
 @st.cache_data
 def load_asm_mapping():
@@ -146,16 +162,28 @@ def get_excel(df):
 
 @st.cache_data
 def get_pdf(df, title):
+    # Standart tablo PDF'leri için
     reg_font, bold_font = get_fonts()
+    
+    font_style = ""
+    if reg_font and bold_font:
+        font_style = f"""
+        @font-face {{ font-family: 'DejaVu'; src: url('{reg_font}'); }}
+        @font-face {{ font-family: 'DejaVu'; src: url('{bold_font}'); font-weight: bold; }}
+        body {{ font-family: 'DejaVu', Arial, sans-serif; font-size: 10px; }}
+        """
+    else:
+        # Eğer fontlar indirilemezse standart Helvetica (Türkçe karakterleri çoğunlukla destekler) kullan
+        font_style = "body { font-family: Helvetica, Arial, sans-serif; font-size: 10px; }"
+        
     html_content = f"""
-    <html>
+    <!DOCTYPE html>
+    <html lang="tr">
     <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <style>
-        @font-face {{ font-family: 'TrFont'; src: url('{reg_font}'); }}
-        @font-face {{ font-family: 'TrFont'; src: url('{bold_font}'); font-weight: bold; }}
+        {font_style}
         @page {{ size: A4; margin: 1cm; }}
-        body {{ font-family: 'TrFont', Helvetica, Arial, sans-serif; font-size: 10px; }}
         h2 {{ text-align: center; color: #333; }}
         table {{ border-collapse: collapse; width: 100%; }}
         th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; }}
@@ -169,7 +197,8 @@ def get_pdf(df, title):
     </html>
     """
     pdf_buffer = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
+    # encoding parametresini xhtml2pdf 0.2.11+ için ayarlıyoruz
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
@@ -191,15 +220,24 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
             return f"<span style='color: red; font-weight: bold;'>%{oran:.2f} (Uyarı)</span>"
         return f"%{oran:.2f}"
 
+    font_style = ""
+    if reg_font and bold_font:
+        font_style = f"""
+        @font-face {{ font-family: 'DejaVu'; src: url('{reg_font}'); }}
+        @font-face {{ font-family: 'DejaVu'; src: url('{bold_font}'); font-weight: bold; }}
+        body {{ font-family: 'DejaVu', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
+        """
+    else:
+        font_style = "body { font-family: Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }"
+
     html_content = f"""
-    <html>
+    <!DOCTYPE html>
+    <html lang="tr">
     <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
     <style>
-        @font-face {{ font-family: 'TrFont'; src: url('{reg_font}'); }}
-        @font-face {{ font-family: 'TrFont'; src: url('{bold_font}'); font-weight: bold; }}
+        {font_style}
         @page {{ size: A4; margin: 1cm; }}
-        body {{ font-family: 'TrFont', Helvetica, Arial, sans-serif; font-size: 10px; color: #333; }}
         h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; }}
         .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; }}
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; }}
@@ -225,9 +263,9 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
                 <th>Kolorektal Taraması</th>
             </tr>
             <tr>
-                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Mamografi Sıra']}.</span></td>
-                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Serviks Sıra']}.</span></td>
-                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Kolorektal Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #bdc3c7;'>İstanbul Sırası: {ilce_ozet['Mamografi Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #bdc3c7;'>İstanbul Sırası: {ilce_ozet['Serviks Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #bdc3c7;'>İstanbul Sırası: {ilce_ozet['Kolorektal Sıra']}.</span></td>
             </tr>
         </table>
         
@@ -263,8 +301,9 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         
         asm_birimler = ilce_detay[ilce_detay['ASM Adı'] == asm_adi].sort_values(by='Birim Adı')
         for _, birim_row in asm_birimler.iterrows():
+            # Satırlardaki Türkçe metinlerin bozulmasını engellemek için string formatlama
             html_content += "<tr>"
-            html_content += f"<td class='left-align'>{birim_row['Birim Adı']}</td>"
+            html_content += f"<td class='left-align'>{str(birim_row['Birim Adı'])}</td>"
             html_content += f"<td>{format_oran(birim_row['Mamografi Oranı'])}</td>"
             html_content += f"<td>{format_oran(birim_row['Serviks Oranı'])}</td>"
             html_content += f"<td>{format_oran(birim_row['Kolorektal Oranı'])}</td>"
@@ -274,7 +313,8 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     html_content += "</body></html>"
     
     pdf_buffer = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer)
+    # utf-8 kodlamasını parametre olarak belirtip bellekte dönüştürüyoruz
+    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
 st.title("📊 KAN-TAR Analiz Sistemi")
