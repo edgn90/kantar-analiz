@@ -208,7 +208,6 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     fonts_loaded = setup_fonts()
     font_family = "'DejaVu', Helvetica, Arial, sans-serif" if fonts_loaded else "Helvetica, Arial, sans-serif"
     
-    # Ayları rakamlara göre sıralayarak ekrana düzgün basmak için:
     def get_month_num(m):
         match = re.search(r'^(\d+)', str(m))
         return int(match.group(1)) if match else 99
@@ -364,7 +363,6 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            # --- SEKMELER (TABS) GÜNCELLENDİ ---
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "🎀 Mamografi Taraması", 
                 "🎗️ Serviks Taraması", 
@@ -495,7 +493,6 @@ if yuklenen_dosyalar:
                         mime="application/pdf"
                     )
                     
-            # --- YENİ EKLENEN AYLIK TREND SEKMESİ ---
             with tab5:
                 st.subheader("📈 Aylık Trend ve Gelişim Analizi")
                 
@@ -503,11 +500,9 @@ if yuklenen_dosyalar:
                     st.info("Trend analizi yapabilmek için sol menüden en az 2 farklı ay (dosya) seçmelisiniz.")
                 else:
                     def get_month_order(filename):
-                        # Dosya adındaki "1) Ocak", "10) Ekim" gibi ilk baştaki rakamı bulur
                         match = re.search(r'^(\d+)', str(filename))
                         return int(match.group(1)) if match else 99
                     
-                    # Veriyi İlçe/ASM seçimine göre filtrele
                     if secilen_ilce == "Tüm İlçeler":
                         st.markdown("**Tüm İstanbul Geneli Aylık Trend**")
                         trend_df_raw = df_filtrelenmis_ay.copy()
@@ -527,7 +522,7 @@ if yuklenen_dosyalar:
                     # Aylara göre grupla
                     trend_grup = trend_df_raw.groupby('Dosya (Ay)')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
                     
-                    # Ayları kronolojik sırala
+                    # Ayları kronolojik sırala (Ocak -> Aralık)
                     trend_grup['Ay_Sira'] = trend_grup['Dosya (Ay)'].apply(get_month_order)
                     trend_grup = trend_grup.sort_values('Ay_Sira').drop('Ay_Sira', axis=1).reset_index(drop=True)
                     
@@ -535,8 +530,13 @@ if yuklenen_dosyalar:
                     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                         trend_grup[f'{t} Oranı (%)'] = (trend_grup[f'{t} Yapılan'] / trend_grup[f'{t} Gereken'] * 100).fillna(0)
                     
-                    # Çizgi grafik için veriyi ayarla
-                    grafik_df = trend_grup.set_index('Dosya (Ay)')[[ 'Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)' ]]
+                    # Çizgi grafikte alfabetik sıralama sorununu önlemek için Categorical Index kullanıyoruz
+                    trend_grup['Ay_Label'] = pd.Categorical(
+                        trend_grup['Dosya (Ay)'], 
+                        categories=trend_grup['Dosya (Ay)'], 
+                        ordered=True
+                    )
+                    grafik_df = trend_grup.set_index('Ay_Label')[[ 'Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)' ]]
                     
                     st.markdown(f"#### 📊 {hedef_isim} - Tarama Oranları Değişimi")
                     st.line_chart(grafik_df)
@@ -544,11 +544,9 @@ if yuklenen_dosyalar:
                     # İçgörüler (Metric) - Son ay ile bir önceki ayın kıyaslaması
                     st.markdown("#### 💡 Son Durum ve Otomatik İçgörüler")
                     
-                    # DataFrame'de en az 2 satır (ay) olduğundan eminiz
                     son_ay = trend_grup.iloc[-1]
                     onceki_ay = trend_grup.iloc[-2]
                     
-                    # Daha temiz görünmesi için dosya adındaki .xlsx vs silebiliriz
                     son_ay_isim = str(son_ay['Dosya (Ay)']).replace('.xlsx', '').replace('Birim Bazında', '').strip()
                     onceki_ay_isim = str(onceki_ay['Dosya (Ay)']).replace('.xlsx', '').replace('Birim Bazında', '').strip()
                     
