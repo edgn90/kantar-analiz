@@ -4,6 +4,7 @@ import io
 import os
 import urllib.request
 import ssl
+import re
 from xhtml2pdf import pisa
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -207,7 +208,13 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     fonts_loaded = setup_fonts()
     font_family = "'DejaVu', Helvetica, Arial, sans-serif" if fonts_loaded else "Helvetica, Arial, sans-serif"
     
-    aylar_str = ", ".join(secilen_aylar)
+    # Ayları rakamlara göre sıralayarak ekrana düzgün basmak için:
+    def get_month_num(m):
+        match = re.search(r'^(\d+)', str(m))
+        return int(match.group(1)) if match else 99
+    
+    sirali_aylar = sorted(secilen_aylar, key=get_month_num)
+    aylar_str = ", ".join(sirali_aylar)
     
     ilce_grup = df.groupby('İlçe')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
@@ -357,7 +364,14 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            tab1, tab2, tab3, tab4 = st.tabs(["🎀 Mamografi Taraması", "🎗️ Serviks Taraması", "🧬 Kolorektal Taraması", "📑 İlçe Bazlı Rapor"])
+            # --- SEKMELER (TABS) GÜNCELLENDİ ---
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "🎀 Mamografi Taraması", 
+                "🎗️ Serviks Taraması", 
+                "🧬 Kolorektal Taraması", 
+                "📑 İlçe Bazlı Rapor", 
+                "📈 Aylık Trend"
+            ])
 
             def tablo_goster(tarama_turu):
                 if secilen_ilce != "Tüm İlçeler":
@@ -458,14 +472,21 @@ if yuklenen_dosyalar:
                     st.info("👈 İlçe bazlı PDF raporu oluşturabilmek için lütfen sol menüden belirli bir ilçeyi seçin ve Çalıştır'a basın.")
                 else:
                     st.subheader(f"📑 {secilen_ilce} İlçesi Özel Değerlendirme Raporu")
-                    st.markdown(f"Bu rapor **{', '.join(secilen_aylar)}** dönemlerini kapsamaktadır.")
+                    
+                    def get_month_num(m):
+                        match = re.search(r'^(\d+)', str(m))
+                        return int(match.group(1)) if match else 99
+                    
+                    sirali_ay_isimleri = sorted(secilen_aylar, key=get_month_num)
+                    st.markdown(f"Bu rapor **{', '.join(sirali_ay_isimleri)}** dönemlerini kapsamaktadır.")
                     st.markdown("Rapor İçeriği:")
                     st.markdown("- İlçenin İstanbul genelindeki başarı sıralaması ve 3 Kanser türündeki özet oranı")
                     st.markdown("- İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları")
                     st.markdown("- Her ASM'nin altına hiyerarşik olarak dizilmiş Aile Hekimliği Birim (AHB) detay oranları")
                     st.markdown("- **%50'nin altında kalan oranlar için kırmızı uyarı vurgusu** ⚠️")
                     
-                    pdf_data = get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar)
+                    with st.spinner("PDF Raporu Hazırlanıyor, lütfen bekleyin..."):
+                        pdf_data = get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar)
                     
                     st.download_button(
                         label=f"📥 {secilen_ilce} Raporunu İndir (PDF)",
@@ -473,6 +494,81 @@ if yuklenen_dosyalar:
                         file_name=f"{secilen_ilce}_Ilce_KANTAR_Raporu.pdf",
                         mime="application/pdf"
                     )
+                    
+            # --- YENİ EKLENEN AYLIK TREND SEKMESİ ---
+            with tab5:
+                st.subheader("📈 Aylık Trend ve Gelişim Analizi")
+                
+                if len(secilen_aylar) < 2:
+                    st.info("Trend analizi yapabilmek için sol menüden en az 2 farklı ay (dosya) seçmelisiniz.")
+                else:
+                    def get_month_order(filename):
+                        # Dosya adındaki "1) Ocak", "10) Ekim" gibi ilk baştaki rakamı bulur
+                        match = re.search(r'^(\d+)', str(filename))
+                        return int(match.group(1)) if match else 99
+                    
+                    # Veriyi İlçe/ASM seçimine göre filtrele
+                    if secilen_ilce == "Tüm İlçeler":
+                        st.markdown("**Tüm İstanbul Geneli Aylık Trend**")
+                        trend_df_raw = df_filtrelenmis_ay.copy()
+                        hedef_isim = "İstanbul Geneli"
+                    else:
+                        trend_df_raw = df_filtrelenmis_ay[df_filtrelenmis_ay['İlçe'] == secilen_ilce].copy()
+                        trend_seviyesi = st.radio("Trend Seviyesi Seçin:", ["İlçe Geneli", "Belirli Bir ASM"])
+                        
+                        if trend_seviyesi == "Belirli Bir ASM":
+                            asm_listesi = sorted(trend_df_raw['ASM Adı'].unique())
+                            secilen_asm_trend = st.selectbox("Analiz edilecek ASM'yi seçin:", asm_listesi)
+                            trend_df_raw = trend_df_raw[trend_df_raw['ASM Adı'] == secilen_asm_trend]
+                            hedef_isim = secilen_asm_trend
+                        else:
+                            hedef_isim = f"{secilen_ilce} İlçe Geneli"
+                    
+                    # Aylara göre grupla
+                    trend_grup = trend_df_raw.groupby('Dosya (Ay)')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
+                    
+                    # Ayları kronolojik sırala
+                    trend_grup['Ay_Sira'] = trend_grup['Dosya (Ay)'].apply(get_month_order)
+                    trend_grup = trend_grup.sort_values('Ay_Sira').drop('Ay_Sira', axis=1).reset_index(drop=True)
+                    
+                    # Oranları hesapla
+                    for t in ['Mamografi', 'Serviks', 'Kolorektal']:
+                        trend_grup[f'{t} Oranı (%)'] = (trend_grup[f'{t} Yapılan'] / trend_grup[f'{t} Gereken'] * 100).fillna(0)
+                    
+                    # Çizgi grafik için veriyi ayarla
+                    grafik_df = trend_grup.set_index('Dosya (Ay)')[[ 'Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)' ]]
+                    
+                    st.markdown(f"#### 📊 {hedef_isim} - Tarama Oranları Değişimi")
+                    st.line_chart(grafik_df)
+                    
+                    # İçgörüler (Metric) - Son ay ile bir önceki ayın kıyaslaması
+                    st.markdown("#### 💡 Son Durum ve Otomatik İçgörüler")
+                    
+                    # DataFrame'de en az 2 satır (ay) olduğundan eminiz
+                    son_ay = trend_grup.iloc[-1]
+                    onceki_ay = trend_grup.iloc[-2]
+                    
+                    # Daha temiz görünmesi için dosya adındaki .xlsx vs silebiliriz
+                    son_ay_isim = str(son_ay['Dosya (Ay)']).replace('.xlsx', '').replace('Birim Bazında', '').strip()
+                    onceki_ay_isim = str(onceki_ay['Dosya (Ay)']).replace('.xlsx', '').replace('Birim Bazında', '').strip()
+                    
+                    st.markdown(f"***{son_ay_isim}*** verileri ile ***{onceki_ay_isim}*** verilerinin karşılaştırması:")
+                    
+                    col_m, col_s, col_k = st.columns(3)
+                    
+                    def metric_goster(col, baslik, oran_kolon):
+                        guncel_deger = son_ay[oran_kolon]
+                        fark = son_ay[oran_kolon] - onceki_ay[oran_kolon]
+                        col.metric(
+                            label=baslik, 
+                            value=f"%{guncel_deger:.2f}", 
+                            delta=f"{fark:.2f}%"
+                        )
+                    
+                    metric_goster(col_m, "🎀 Mamografi", "Mamografi Oranı (%)")
+                    metric_goster(col_s, "🎗️ Serviks", "Serviks Oranı (%)")
+                    metric_goster(col_k, "🧬 Kolorektal", "Kolorektal Oranı (%)")
+
         else:
             st.warning("Lütfen sol menüden analiz edilecek en az bir ay (dosya) seçin.")
 
