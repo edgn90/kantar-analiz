@@ -26,11 +26,9 @@ def get_fonts():
         except Exception:
             pass
             
-    # Dosyaların indirilip indirilmediğini kontrol et
     reg_exists = os.path.exists(regular)
     bold_exists = os.path.exists(bold)
     
-    # İndirme başarılıysa yollarını döndür, aksi halde None döndür
     reg_path = os.path.abspath(regular).replace('\\', '/') if reg_exists else None
     bold_path = os.path.abspath(bold).replace('\\', '/') if bold_exists else None
     
@@ -162,7 +160,6 @@ def get_excel(df):
 
 @st.cache_data
 def get_pdf(df, title):
-    # Standart tablo PDF'leri için
     reg_font, bold_font = get_fonts()
     
     font_style = ""
@@ -173,7 +170,6 @@ def get_pdf(df, title):
         body {{ font-family: 'DejaVu', Arial, sans-serif; font-size: 10px; }}
         """
     else:
-        # Eğer fontlar indirilemezse standart Helvetica (Türkçe karakterleri çoğunlukla destekler) kullan
         font_style = "body { font-family: Helvetica, Arial, sans-serif; font-size: 10px; }"
         
     html_content = f"""
@@ -197,8 +193,8 @@ def get_pdf(df, title):
     </html>
     """
     pdf_buffer = io.BytesIO()
-    # encoding parametresini xhtml2pdf 0.2.11+ için ayarlıyoruz
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
+    # YENİ YÖNTEM: Metni UTF-8 bytelarına çevirip StringIO yerine BytesIO kullanıyoruz
+    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
@@ -301,7 +297,6 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         
         asm_birimler = ilce_detay[ilce_detay['ASM Adı'] == asm_adi].sort_values(by='Birim Adı')
         for _, birim_row in asm_birimler.iterrows():
-            # Satırlardaki Türkçe metinlerin bozulmasını engellemek için string formatlama
             html_content += "<tr>"
             html_content += f"<td class='left-align'>{str(birim_row['Birim Adı'])}</td>"
             html_content += f"<td>{format_oran(birim_row['Mamografi Oranı'])}</td>"
@@ -313,8 +308,8 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     html_content += "</body></html>"
     
     pdf_buffer = io.BytesIO()
-    # utf-8 kodlamasını parametre olarak belirtip bellekte dönüştürüyoruz
-    pisa.CreatePDF(io.StringIO(html_content), dest=pdf_buffer, encoding='utf-8')
+    # YENİ YÖNTEM: Metni UTF-8 bytelarına çevirip StringIO yerine BytesIO kullanıyoruz
+    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer)
     return pdf_buffer.getvalue()
 
 st.title("📊 KAN-TAR Analiz Sistemi")
