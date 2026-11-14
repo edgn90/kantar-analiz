@@ -1,5 +1,6 @@
 streamlit
 pandas
 openpyxl
-matplotlib
 xhtml2pdf
+reportlab
+plotly
