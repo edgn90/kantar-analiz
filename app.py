@@ -6,6 +6,7 @@ import urllib.request
 import ssl
 import re
 import plotly.express as px
+import plotly.graph_objects as go
 from xhtml2pdf import pisa
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -364,7 +365,6 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            # --- SEKMELER (TABS) GÜNCELLENDİ ---
             tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
                 "🎀 Mamografi Taraması", 
                 "🎗️ Serviks Taraması", 
@@ -411,12 +411,20 @@ if yuklenen_dosyalar:
                         x='İlçe', 
                         y='Genel Oran (%)', 
                         text='Genel Oran (%)',
-                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları",
+                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları (Hedef Çizgisi: %70)",
                         color='Genel Oran (%)',
                         color_continuous_scale='Blues'
                     )
                     fig_ilce.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
                     fig_ilce.update_layout(xaxis_tickangle=-45)
+                    # --- SAĞLIK BAKANLIĞI HEDEF ÇİZGİSİ (%70) ---
+                    fig_ilce.add_hline(
+                        y=70, 
+                        line_dash="dash", 
+                        line_color="red", 
+                        annotation_text="Bakanlık Hedefi (%70)", 
+                        annotation_position="top right"
+                    )
                     st.plotly_chart(fig_ilce, use_container_width=True)
 
                 ilce_grup_pdf = ilce_grup_sirali.copy()
@@ -450,12 +458,20 @@ if yuklenen_dosyalar:
                         x='ASM Adı',
                         y=hedef_kolon,
                         text=hedef_kolon,
-                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları",
+                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları (Hedef Çizgisi: %70)",
                         color=hedef_kolon,
                         color_continuous_scale='Greens'
                     )
                     fig_asm.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
                     fig_asm.update_layout(xaxis_tickangle=-45)
+                    # --- SAĞLIK BAKANLIĞI HEDEF ÇİZGİSİ (%70) ---
+                    fig_asm.add_hline(
+                        y=70, 
+                        line_dash="dash", 
+                        line_color="red", 
+                        annotation_text="Bakanlık Hedefi (%70)", 
+                        annotation_position="top right"
+                    )
                     st.plotly_chart(fig_asm, use_container_width=True)
 
                 asm_grup_pdf = asm_grup_sirali.copy()
@@ -608,22 +624,18 @@ if yuklenen_dosyalar:
                     metric_goster(col_s, "🎗️ Serviks", "Serviks Oranı (%)")
                     metric_goster(col_k, "🧬 Kolorektal", "Kolorektal Oranı (%)")
 
-            # --- YENİ EKLENEN TAB 6: ACİL MÜDAHALE (SIFIR TARAMA) ---
             with tab6:
                 st.subheader("🚨 Acil Müdahale Gerektiren Birimler (Tarama Yapılmayan / %0 Birimler)")
                 st.markdown("Bu sekmede, seçilen ilçe ve aylar kapsamında **herhangi bir tarama türünde yapılan sayısı 0 (oranı %0)** olan birimler listelenmektedir. Bu birimlerin acilen takibe alınması gerekmektedir.")
                 
-                # İlçe filtresi uygula
                 if secilen_ilce != "Tüm İlçeler":
                     acil_df_base = df_filtrelenmis_ay[df_filtrelenmis_ay['İlçe'] == secilen_ilce].copy()
                 else:
                     acil_df_base = df_filtrelenmis_ay.copy()
                 
-                # Her birim için satırları tarayıp sıfır olanları ayıralım
                 sifir_liste = []
                 
                 for _, row in acil_df_base.iterrows():
-                    # Mamografi sıfır mı? (Gereken > 0 ama Yapılan == 0)
                     if row.get('Mamografi Yapılan', 0) == 0:
                         sifir_liste.append({
                             'Dosya (Ay)': row['Dosya (Ay)'],
@@ -636,7 +648,6 @@ if yuklenen_dosyalar:
                             'Yapılan Sayı': 0
                         })
                     
-                    # Serviks sıfır mı?
                     if row.get('Serviks Yapılan', 0) == 0:
                         sifir_liste.append({
                             'Dosya (Ay)': row['Dosya (Ay)'],
@@ -649,7 +660,6 @@ if yuklenen_dosyalar:
                             'Yapılan Sayı': 0
                         })
                         
-                    # Kolorektal sıfır mı?
                     if row.get('Kolorektal Yapılan', 0) == 0:
                         sifir_liste.append({
                             'Dosya (Ay)': row['Dosya (Ay)'],
