@@ -5,6 +5,7 @@ import os
 import urllib.request
 import ssl
 import re
+import plotly.express as px
 from xhtml2pdf import pisa
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -383,12 +384,40 @@ if yuklenen_dosyalar:
                 gereken_kolon = f"{tarama_turu} Gereken"
                 yapilan_kolon = f"{tarama_turu} Yapılan"
                 
+                # --- ÖZET METRİK KARTLARI ---
+                toplam_gereken = filtrelenmis_df[gereken_kolon].sum()
+                toplam_yapilan = filtrelenmis_df[yapilan_kolon].sum()
+                genel_oran = (toplam_yapilan / toplam_gereken * 100) if toplam_gereken > 0 else 0
+
+                st.markdown(f"#### 📌 {ilce_baslik} - {tarama_turu} Özet Metrikleri")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Toplam Gereken", f"{toplam_gereken:,.0f}")
+                m2.metric("Toplam Yapılan", f"{toplam_yapilan:,.0f}")
+                m3.metric("Genel Başarı Oranı", f"%{genel_oran:.2f}")
+
+                st.markdown("---")
+                
                 st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
                 ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
                 ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
                 ilce_grup_sirali = ilce_grup.sort_values(by='Genel Oran (%)', ascending=False).reset_index(drop=True)
                 ilce_grup_sirali.index += 1
                 
+                # Plotly Bar Chart for Districts (if Tüm İlçeler selected)
+                if secilen_ilce == "Tüm İlçeler":
+                    fig_ilce = px.bar(
+                        ilce_grup_sirali, 
+                        x='İlçe', 
+                        y='Genel Oran (%)', 
+                        text='Genel Oran (%)',
+                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları",
+                        color='Genel Oran (%)',
+                        color_continuous_scale='Blues'
+                    )
+                    fig_ilce.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+                    fig_ilce.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig_ilce, use_container_width=True)
+
                 ilce_grup_pdf = ilce_grup_sirali.copy()
                 ilce_grup_pdf['Genel Oran (%)'] = ilce_grup_pdf['Genel Oran (%)'].apply(lambda x: f"%{x:.2f}")
                 
@@ -414,6 +443,21 @@ if yuklenen_dosyalar:
                 asm_grup_sirali = asm_grup_aralikli.sort_values(by=hedef_kolon, ascending=False).reset_index(drop=True)
                 asm_grup_sirali.index += 1
                 
+                # Plotly Bar Chart for ASMs
+                if not asm_grup_sirali.empty:
+                    fig_asm = px.bar(
+                        asm_grup_sirali,
+                        x='ASM Adı',
+                        y=hedef_kolon,
+                        text=hedef_kolon,
+                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları",
+                        color=hedef_kolon,
+                        color_continuous_scale='Greens'
+                    )
+                    fig_asm.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+                    fig_asm.update_layout(xaxis_tickangle=-45)
+                    st.plotly_chart(fig_asm, use_container_width=True)
+
                 asm_grup_pdf = asm_grup_sirali.copy()
                 asm_grup_pdf[hedef_kolon] = asm_grup_pdf[hedef_kolon].apply(lambda x: f"%{x:.2f}")
                 
@@ -428,35 +472,6 @@ if yuklenen_dosyalar:
                     st.download_button("📥 Excel İndir (ASM)", data=get_excel(asm_grup_sirali), file_name=f"{tarama_turu}_ASM_Siralama.xlsx", key=f"{tarama_turu}_asm_ex")
                 with col4:
                     st.download_button("📄 PDF İndir (ASM)", data=get_pdf(asm_grup_pdf, f"{ilce_baslik} - {tarama_turu} ASM Siralamasi"), file_name=f"{tarama_turu}_ASM_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_asm_pdf")
-                
-                st.markdown("---")
-
-                st.subheader(f"🩺 Birim (AHB) Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
-                birim_df_aralikli = filtrelenmis_df[
-                    (filtrelenmis_df[hedef_kolon] >= min_oran) & 
-                    (filtrelenmis_df[hedef_kolon] <= max_oran)
-                ]
-                
-                birim_df_sirali = birim_df_aralikli.sort_values(by=hedef_kolon, ascending=False)
-                
-                gosterilecek_df = birim_df_sirali[[
-                    'İlçe', 'ASM Adı', 'Birim Adı', 'Birim ID', gereken_kolon, yapilan_kolon, hedef_kolon
-                ]].reset_index(drop=True)
-                gosterilecek_df.index += 1
-                
-                gosterilecek_pdf = gosterilecek_df.copy()
-                gosterilecek_pdf[hedef_kolon] = gosterilecek_pdf[hedef_kolon].apply(lambda x: f"%{x:.2f}")
-                
-                st.dataframe(
-                    gosterilecek_df.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"}), 
-                    use_container_width=True
-                )
-                
-                col5, col6 = st.columns(2)
-                with col5:
-                    st.download_button("📥 Excel İndir (Birim)", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
-                with col6:
-                    st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
             with tab1:
                 tablo_goster("Mamografi")
