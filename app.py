@@ -403,7 +403,6 @@ if yuklenen_dosyalar:
                 ilce_grup_sirali = ilce_grup.sort_values(by='Genel Oran (%)', ascending=False).reset_index(drop=True)
                 ilce_grup_sirali.index += 1
                 
-                # Plotly Bar Chart for Districts (if Tüm İlçeler selected)
                 if secilen_ilce == "Tüm İlçeler":
                     fig_ilce = px.bar(
                         ilce_grup_sirali, 
@@ -443,7 +442,6 @@ if yuklenen_dosyalar:
                 asm_grup_sirali = asm_grup_aralikli.sort_values(by=hedef_kolon, ascending=False).reset_index(drop=True)
                 asm_grup_sirali.index += 1
                 
-                # Plotly Bar Chart for ASMs
                 if not asm_grup_sirali.empty:
                     fig_asm = px.bar(
                         asm_grup_sirali,
@@ -472,6 +470,37 @@ if yuklenen_dosyalar:
                     st.download_button("📥 Excel İndir (ASM)", data=get_excel(asm_grup_sirali), file_name=f"{tarama_turu}_ASM_Siralama.xlsx", key=f"{tarama_turu}_asm_ex")
                 with col4:
                     st.download_button("📄 PDF İndir (ASM)", data=get_pdf(asm_grup_pdf, f"{ilce_baslik} - {tarama_turu} ASM Siralamasi"), file_name=f"{tarama_turu}_ASM_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_asm_pdf")
+
+                st.markdown("---")
+
+                # --- BİRİM BAZLI DETAYLI TABLO (EXPANDER İÇİNDE) ---
+                with st.expander("Birim Bazlı Detaylı Tabloyu Gör"):
+                    st.subheader(f"🩺 Birim (AHB) Bazlı Sıralama ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
+                    birim_df_aralikli = filtrelenmis_df[
+                        (filtrelenmis_df[hedef_kolon] >= min_oran) & 
+                        (filtrelenmis_df[hedef_kolon] <= max_oran)
+                    ]
+                    
+                    birim_df_sirali = birim_df_aralikli.sort_values(by=hedef_kolon, ascending=False)
+                    
+                    gosterilecek_df = birim_df_sirali[[
+                        'İlçe', 'ASM Adı', 'Birim Adı', 'Birim ID', gereken_kolon, yapilan_kolon, hedef_kolon
+                    ]].reset_index(drop=True)
+                    gosterilecek_df.index += 1
+                    
+                    gosterilecek_pdf = gosterilecek_df.copy()
+                    gosterilecek_pdf[hedef_kolon] = gosterilecek_pdf[hedef_kolon].apply(lambda x: f"%{x:.2f}")
+                    
+                    st.dataframe(
+                        gosterilecek_df.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"}), 
+                        use_container_width=True
+                    )
+                    
+                    col5, col6 = st.columns(2)
+                    with col5:
+                        st.download_button("📥 Excel İndir (Birim)", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
+                    with col6:
+                        st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
             with tab1:
                 tablo_goster("Mamografi")
