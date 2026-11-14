@@ -364,12 +364,14 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            # --- SEKMELER (TABS) GÜNCELLENDİ ---
+            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
                 "🎀 Mamografi Taraması", 
                 "🎗️ Serviks Taraması", 
                 "🧬 Kolorektal Taraması", 
                 "📑 İlçe Bazlı Rapor", 
-                "📈 Aylık Trend"
+                "📈 Aylık Trend",
+                "🚨 Acil Müdahale (Sıfır Tarama)"
             ])
 
             def tablo_goster(tarama_turu):
@@ -563,18 +565,14 @@ if yuklenen_dosyalar:
                         else:
                             hedef_isim = f"{secilen_ilce} İlçe Geneli"
                     
-                    # Aylara göre grupla
                     trend_grup = trend_df_raw.groupby('Dosya (Ay)')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
                     
-                    # Ayları kronolojik sırala (Ocak -> Aralık)
                     trend_grup['Ay_Sira'] = trend_grup['Dosya (Ay)'].apply(get_month_order)
                     trend_grup = trend_grup.sort_values('Ay_Sira').drop('Ay_Sira', axis=1).reset_index(drop=True)
                     
-                    # Oranları hesapla
                     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                         trend_grup[f'{t} Oranı (%)'] = (trend_grup[f'{t} Yapılan'] / trend_grup[f'{t} Gereken'] * 100).fillna(0)
                     
-                    # Çizgi grafikte alfabetik sıralama sorununu önlemek için Categorical Index kullanıyoruz
                     trend_grup['Ay_Label'] = pd.Categorical(
                         trend_grup['Dosya (Ay)'], 
                         categories=trend_grup['Dosya (Ay)'], 
@@ -585,7 +583,6 @@ if yuklenen_dosyalar:
                     st.markdown(f"#### 📊 {hedef_isim} - Tarama Oranları Değişimi")
                     st.line_chart(grafik_df)
                     
-                    # İçgörüler (Metric) - Son ay ile bir önceki ayın kıyaslaması
                     st.markdown("#### 💡 Son Durum ve Otomatik İçgörüler")
                     
                     son_ay = trend_grup.iloc[-1]
@@ -610,6 +607,92 @@ if yuklenen_dosyalar:
                     metric_goster(col_m, "🎀 Mamografi", "Mamografi Oranı (%)")
                     metric_goster(col_s, "🎗️ Serviks", "Serviks Oranı (%)")
                     metric_goster(col_k, "🧬 Kolorektal", "Kolorektal Oranı (%)")
+
+            # --- YENİ EKLENEN TAB 6: ACİL MÜDAHALE (SIFIR TARAMA) ---
+            with tab6:
+                st.subheader("🚨 Acil Müdahale Gerektiren Birimler (Tarama Yapılmayan / %0 Birimler)")
+                st.markdown("Bu sekmede, seçilen ilçe ve aylar kapsamında **herhangi bir tarama türünde yapılan sayısı 0 (oranı %0)** olan birimler listelenmektedir. Bu birimlerin acilen takibe alınması gerekmektedir.")
+                
+                # İlçe filtresi uygula
+                if secilen_ilce != "Tüm İlçeler":
+                    acil_df_base = df_filtrelenmis_ay[df_filtrelenmis_ay['İlçe'] == secilen_ilce].copy()
+                else:
+                    acil_df_base = df_filtrelenmis_ay.copy()
+                
+                # Her birim için satırları tarayıp sıfır olanları ayıralım
+                sifir_liste = []
+                
+                for _, row in acil_df_base.iterrows():
+                    # Mamografi sıfır mı? (Gereken > 0 ama Yapılan == 0)
+                    if row.get('Mamografi Yapılan', 0) == 0:
+                        sifir_liste.append({
+                            'Dosya (Ay)': row['Dosya (Ay)'],
+                            'İlçe': row['İlçe'],
+                            'ASM Adı': row['ASM Adı'],
+                            'Birim Adı': row['Birim Adı'],
+                            'Birim ID': row['Birim ID'],
+                            'Tarama Türü': 'Mamografi',
+                            'Gereken Hedef Sayısı': row['Mamografi Gereken'],
+                            'Yapılan Sayı': 0
+                        })
+                    
+                    # Serviks sıfır mı?
+                    if row.get('Serviks Yapılan', 0) == 0:
+                        sifir_liste.append({
+                            'Dosya (Ay)': row['Dosya (Ay)'],
+                            'İlçe': row['İlçe'],
+                            'ASM Adı': row['ASM Adı'],
+                            'Birim Adı': row['Birim Adı'],
+                            'Birim ID': row['Birim ID'],
+                            'Tarama Türü': 'Serviks',
+                            'Gereken Hedef Sayısı': row['Serviks Gereken'],
+                            'Yapılan Sayı': 0
+                        })
+                        
+                    # Kolorektal sıfır mı?
+                    if row.get('Kolorektal Yapılan', 0) == 0:
+                        sifir_liste.append({
+                            'Dosya (Ay)': row['Dosya (Ay)'],
+                            'İlçe': row['İlçe'],
+                            'ASM Adı': row['ASM Adı'],
+                            'Birim Adı': row['Birim Adı'],
+                            'Birim ID': row['Birim ID'],
+                            'Tarama Türü': 'Kolorektal',
+                            'Gereken Hedef Sayısı': row['Kolorektal Gereken'],
+                            'Yapılan Sayı': 0
+                        })
+                
+                if len(sifir_liste) > 0:
+                    df_sifir = pd.DataFrame(sifir_liste)
+                    df_sifir = df_sifir.sort_values(by=['İlçe', 'ASM Adı', 'Birim Adı']).reset_index(drop=True)
+                    df_sifir.index += 1
+                    
+                    st.warning(f"⚠️ Toplam **{len(df_sifir)}** adet sıfır tarama (acil müdahale gerektiren) kaydı tespit edildi.")
+                    
+                    st.dataframe(
+                        df_sifir.style.format({'Gereken Hedef Sayısı': "{:.0f}", 'Yapılan Sayı': "{:.0f}"})
+                        .background_gradient(subset=['Gereken Hedef Sayısı'], cmap='Reds'),
+                        use_container_width=True
+                    )
+                    
+                    col_ex, col_pdf = st.columns(2)
+                    with col_ex:
+                        st.download_button(
+                            "📥 Excel İndir (Acil Müdahale Listesi)", 
+                            data=get_excel(df_sifir), 
+                            file_name="Acil_Mudahale_Sifir_Taramalar.xlsx", 
+                            key="acil_excel_btn"
+                        )
+                    with col_pdf:
+                        st.download_button(
+                            "📄 PDF İndir (Acil Müdahale Listesi)", 
+                            data=get_pdf(df_sifir, "Acil Mudahale Gerektiren Sifir Tarama Birimleri"), 
+                            file_name="Acil_Mudahale_Sifir_Taramalar.pdf", 
+                            mime="application/pdf", 
+                            key="acil_pdf_btn"
+                        )
+                else:
+                    st.success("🎉 Tebrikler! Seçilen kriterlerde yapılan tarama sayısı sıfır olan (hiç tarama yapmamış) birim bulunmuyor.")
 
         else:
             st.warning("Lütfen sol menüden analiz edilecek en az bir ay (dosya) seçin.")
