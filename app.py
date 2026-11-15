@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import zipfile
 import urllib.request
 import ssl
 import re
@@ -598,16 +599,16 @@ if yuklenen_dosyalar:
                 tablo_goster("Kolorektal")
                 
             with tab4:
+                def get_month_num(m):
+                    match = re.search(r'^(\d+)', str(m))
+                    return int(match.group(1)) if match else 99
+
+                sirali_ay_isimleri = sorted(secilen_aylar, key=get_month_num)
+
                 if secilen_ilce == "Tüm İlçeler":
-                    st.info("👈 İlçe bazlı PDF raporu oluşturabilmek için lütfen sol menüden belirli bir ilçeyi seçin ve Çalıştır'a basın.")
+                    st.info("👈 Tekil ilçe bazlı PDF raporu oluşturabilmek için sol menüden belirli bir ilçeyi seçebilirsiniz; veya aşağıdan tüm ilçelerin raporlarını tek seferde ZIP olarak indirebilirsiniz.")
                 else:
                     st.subheader(f"📑 {secilen_ilce} İlçesi Özel Değerlendirme Raporu")
-                    
-                    def get_month_num(m):
-                        match = re.search(r'^(\d+)', str(m))
-                        return int(match.group(1)) if match else 99
-                    
-                    sirali_ay_isimleri = sorted(secilen_aylar, key=get_month_num)
                     st.markdown(f"Bu rapor **{', '.join(sirali_ay_isimleri)}** dönemlerini kapsamaktadır.")
                     st.markdown("Rapor İçeriği:")
                     st.markdown("- İlçenin İstanbul genelindeki başarı sıralaması ve 3 Kanser türündeki özet oranı")
@@ -623,6 +624,51 @@ if yuklenen_dosyalar:
                         data=pdf_data,
                         file_name=f"{secilen_ilce}_Ilce_KANTAR_Raporu.pdf",
                         mime="application/pdf"
+                    )
+
+                st.markdown("---")
+                st.subheader("📦 Tüm İlçeler İçin Tek Tıkla Toplu PDF Raporu (.ZIP)")
+                
+                mevcut_ilceler = sorted([
+                    ilce for ilce in df['İlçe'].unique() 
+                    if ilce != "Diğer/Kurum Tabiplikleri"
+                ])
+                
+                st.markdown(
+                    f"Seçili **{', '.join(sirali_ay_isimleri)}** dönemleri için veride yer alan **{len(mevcut_ilceler)} ilçenin** tamamına ait "
+                    "ayrı ayrı hazırlanmış Türkçe karakter uyumlu PDF raporlarını tek bir `.zip` arşiv dosyası halinde oluşturup indirebilirsiniz."
+                )
+
+                zip_cache_key = f"toplu_zip_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
+
+                if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
+                    if not mevcut_ilceler:
+                        st.warning("Rapor oluşturulacak geçerli ilçe verisi bulunamadı.")
+                    else:
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        zip_buffer = io.BytesIO()
+                        
+                        with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                            toplam_ilce = len(mevcut_ilceler)
+                            for idx, ilce_adi in enumerate(mevcut_ilceler, start=1):
+                                status_text.text(f"PDF hazırlanıyor ({idx}/{toplam_ilce}): {ilce_adi} İlçesi...")
+                                ilce_pdf_bytes = get_ilce_rapor_pdf(df, ilce_adi, secilen_aylar)
+                                zf.writestr(f"{ilce_adi}_Ilce_KANTAR_Raporu.pdf", ilce_pdf_bytes)
+                                progress_bar.progress(idx / toplam_ilce)
+                        
+                        status_text.empty()
+                        progress_bar.empty()
+                        st.session_state[zip_cache_key] = zip_buffer.getvalue()
+
+                if zip_cache_key in st.session_state:
+                    st.success(f"✅ {len(mevcut_ilceler)} ilçe için PDF raporları arşivlendi ve indirilmeye hazır!")
+                    st.download_button(
+                        label="📥 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)",
+                        data=st.session_state[zip_cache_key],
+                        file_name="Tum_Ilceler_KANTAR_Raporlari.zip",
+                        mime="application/zip",
+                        key="toplu_zip_indir_btn"
                     )
                     
             with tab5:
