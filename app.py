@@ -64,7 +64,6 @@ def get_turkish_font_paths():
         if _is_valid_ttf(reg_path) and _is_valid_ttf(bold_path):
             return os.path.abspath(reg_path), os.path.abspath(bold_path)
 
-    # Yerelde bulunamazsa güvenilir jsDelivr CDN üzerinden indir
     local_reg = os.path.abspath("DejaVuSans.ttf")
     local_bold = os.path.abspath("DejaVuSans-Bold.ttf")
 
@@ -697,83 +696,90 @@ if yuklenen_dosyalar:
 
             with tab6:
                 st.subheader("🚨 Acil Müdahale Gerektiren Birimler (Tarama Yapılmayan / %0 Birimler)")
-                st.markdown("Bu sekmede, seçilen ilçe ve aylar kapsamında **herhangi bir tarama türünde yapılan sayısı 0 (oranı %0)** olan birimler listelenmektedir. Bu birimlerin acilen takibe alınması gerekmektedir.")
+                st.markdown("Bu sekmede, seçilen ilçe ve aylar kapsamında **birim özelinde hangi aylarda sıfır tarama yapıldığı** ve **kaç kez sıfır alındığı** tarama türüne göre ayrı sekmelerde listelenmektedir.")
                 
                 if secilen_ilce != "Tüm İlçeler":
                     acil_df_base = df_filtrelenmis_ay[df_filtrelenmis_ay['İlçe'] == secilen_ilce].copy()
                 else:
                     acil_df_base = df_filtrelenmis_ay.copy()
-                
-                sifir_liste = []
-                
-                for _, row in acil_df_base.iterrows():
-                    if row.get('Mamografi Yapılan', 0) == 0:
-                        sifir_liste.append({
-                            'Dosya (Ay)': row['Dosya (Ay)'],
-                            'İlçe': row['İlçe'],
-                            'ASM Adı': row['ASM Adı'],
-                            'Birim Adı': row['Birim Adı'],
-                            'Birim ID': row['Birim ID'],
-                            'Tarama Türü': 'Mamografi',
-                            'Gereken Hedef Sayısı': row['Mamografi Gereken'],
-                            'Yapılan Sayı': 0
-                        })
-                    
-                    if row.get('Serviks Yapılan', 0) == 0:
-                        sifir_liste.append({
-                            'Dosya (Ay)': row['Dosya (Ay)'],
-                            'İlçe': row['İlçe'],
-                            'ASM Adı': row['ASM Adı'],
-                            'Birim Adı': row['Birim Adı'],
-                            'Birim ID': row['Birim ID'],
-                            'Tarama Türü': 'Serviks',
-                            'Gereken Hedef Sayısı': row['Serviks Gereken'],
-                            'Yapılan Sayı': 0
-                        })
-                        
-                    if row.get('Kolorektal Yapılan', 0) == 0:
-                        sifir_liste.append({
-                            'Dosya (Ay)': row['Dosya (Ay)'],
-                            'İlçe': row['İlçe'],
-                            'ASM Adı': row['ASM Adı'],
-                            'Birim Adı': row['Birim Adı'],
-                            'Birim ID': row['Birim ID'],
-                            'Tarama Türü': 'Kolorektal',
-                            'Gereken Hedef Sayısı': row['Kolorektal Gereken'],
-                            'Yapılan Sayı': 0
-                        })
-                
-                if len(sifir_liste) > 0:
-                    df_sifir = pd.DataFrame(sifir_liste)
-                    df_sifir = df_sifir.sort_values(by=['İlçe', 'ASM Adı', 'Birim Adı']).reset_index(drop=True)
-                    df_sifir.index += 1
-                    
-                    st.warning(f"⚠️ Toplam **{len(df_sifir)}** adet sıfır tarama (acil müdahale gerektiren) kaydı tespit edildi.")
-                    
+
+                def get_month_order_acil(filename):
+                    match = re.search(r'^(\d+)', str(filename))
+                    return int(match.group(1)) if match else 99
+
+                def clean_month_name_acil(filename):
+                    return str(filename).replace('.xlsx', '').replace('.xls', '').replace('Birim Bazında', '').strip()
+
+                def acil_tarama_tablosu_goster(tarama_turu):
+                    yapilan_col = f"{tarama_turu} Yapılan"
+                    gereken_col = f"{tarama_turu} Gereken"
+
+                    df_zero = acil_df_base[acil_df_base[yapilan_col] == 0].copy()
+
+                    if df_zero.empty:
+                        st.success(f"🎉 Tebrikler! Seçilen kriterlerde **{tarama_turu}** taraması sıfır olan birim bulunmuyor.")
+                        return
+
+                    df_zero['Ay_Sira'] = df_zero['Dosya (Ay)'].apply(get_month_order_acil)
+                    df_zero['Ay_Temiz'] = df_zero['Dosya (Ay)'].apply(clean_month_name_acil)
+                    df_zero = df_zero.sort_values(['Ay_Sira', 'Dosya (Ay)'])
+
+                    df_birim_ozet = df_zero.groupby(['İlçe', 'ASM Adı', 'Birim Adı', 'Birim ID'], as_index=False).agg(
+                        **{
+                            'Sıfır Olduğu Ay Sayısı': ('Dosya (Ay)', 'nunique'),
+                            'Sıfır Olduğu Aylar': ('Ay_Temiz', lambda x: ', '.join(dict.fromkeys(x))),
+                            'Toplam Gereken Hedef': (gereken_col, 'sum')
+                        }
+                    )
+
+                    df_birim_ozet = df_birim_ozet.sort_values(
+                        by=['Sıfır Olduğu Ay Sayısı', 'Toplam Gereken Hedef', 'İlçe', 'ASM Adı', 'Birim Adı'],
+                        ascending=[False, False, True, True, True]
+                    ).reset_index(drop=True)
+                    df_birim_ozet.index += 1
+
+                    st.warning(
+                        f"⚠️ **{tarama_turu}** taramasında toplam **{len(df_birim_ozet)}** birimin "
+                        f"en az 1 ayda sıfır tarama yaptığı tespit edildi."
+                    )
+
                     st.dataframe(
-                        df_sifir.style.format({'Gereken Hedef Sayısı': "{:.0f}", 'Yapılan Sayı': "{:.0f}"})
-                        .background_gradient(subset=['Gereken Hedef Sayısı'], cmap='Reds'),
+                        df_birim_ozet.style.format({
+                            'Sıfır Olduğu Ay Sayısı': "{:.0f}",
+                            'Toplam Gereken Hedef': "{:.0f}"
+                        }).background_gradient(subset=['Sıfır Olduğu Ay Sayısı'], cmap='Reds'),
                         use_container_width=True
                     )
-                    
+
                     col_ex, col_pdf = st.columns(2)
                     with col_ex:
                         st.download_button(
-                            "📥 Excel İndir (Acil Müdahale Listesi)", 
-                            data=get_excel(df_sifir), 
-                            file_name="Acil_Mudahale_Sifir_Taramalar.xlsx", 
-                            key="acil_excel_btn"
+                            f"📥 Excel İndir ({tarama_turu} Sıfır Listesi)",
+                            data=get_excel(df_birim_ozet),
+                            file_name=f"{tarama_turu}_Acil_Mudahale_Sifir_Taramalar.xlsx",
+                            key=f"acil_excel_btn_{tarama_turu}"
                         )
                     with col_pdf:
                         st.download_button(
-                            "📄 PDF İndir (Acil Müdahale Listesi)", 
-                            data=get_pdf(df_sifir, "Acil Müdahale Gerektiren Sıfır Tarama Birimleri"), 
-                            file_name="Acil_Mudahale_Sifir_Taramalar.pdf", 
-                            mime="application/pdf", 
-                            key="acil_pdf_btn"
+                            f"📄 PDF İndir ({tarama_turu} Sıfır Listesi)",
+                            data=get_pdf(df_birim_ozet, f"{tarama_turu} - Acil Müdahale Sıfır Tarama Birimleri"),
+                            file_name=f"{tarama_turu}_Acil_Mudahale_Sifir_Taramalar.pdf",
+                            mime="application/pdf",
+                            key=f"acil_pdf_btn_{tarama_turu}"
                         )
-                else:
-                    st.success("🎉 Tebrikler! Seçilen kriterlerde yapılan tarama sayısı sıfır olan (hiç tarama yapmamış) birim bulunmuyor.")
+
+                subtab_m, subtab_s, subtab_k = st.tabs([
+                    "🎀 Mamografi Sıfır Taramalar",
+                    "🎗️ Serviks Sıfır Taramalar",
+                    "🧬 Kolorektal Sıfır Taramalar"
+                ])
+
+                with subtab_m:
+                    acil_tarama_tablosu_goster("Mamografi")
+                with subtab_s:
+                    acil_tarama_tablosu_goster("Serviks")
+                with subtab_k:
+                    acil_tarama_tablosu_goster("Kolorektal")
 
         else:
             st.warning("Lütfen sol menüden analiz edilecek en az bir ay (dosya) seçin.")
