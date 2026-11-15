@@ -6,7 +6,9 @@ import urllib.request
 import ssl
 import re
 import plotly.express as px
+import plotly.graph_objects as go
 from xhtml2pdf import pisa
+from xhtml2pdf.default import DEFAULT_FONT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
@@ -14,43 +16,109 @@ from reportlab.pdfbase.pdfmetrics import registerFontFamily
 # Sayfa Ayarları
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
-@st.cache_resource
-def setup_fonts():
-    """
-    Fontları indirir ve doğrudan ReportLab PDF motorunun çekirdeğine kaydeder.
-    Bu yöntem CSS @font-face hatalarını aşarak %100 Türkçe karakter garantisi sağlar.
-    """
+
+def _is_valid_ttf(path):
+    return os.path.exists(path) and os.path.getsize(path) > 100_000
+
+
+def _download_font(url, dest_path):
     try:
         ssl._create_default_https_context = ssl._create_unverified_context
     except Exception:
         pass
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp, open(dest_path, "wb") as out:
+            out.write(resp.read())
+        return _is_valid_ttf(dest_path)
+    except Exception:
+        if os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
+        return False
 
-    regular = "DejaVuSans.ttf"
-    bold = "DejaVuSans-Bold.ttf"
-    
-    # Fontlar yoksa GitHub üzerinden indir
-    if not os.path.exists(regular):
-        try:
-            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", regular)
-        except Exception:
-            pass
-            
-    if not os.path.exists(bold):
-        try:
-            urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf", bold)
-        except Exception:
-            pass
-            
-    # İndirme başarılıysa fontları doğrudan sisteme kaydet
-    if os.path.exists(regular) and os.path.exists(bold):
-        try:
-            pdfmetrics.registerFont(TTFont('DejaVuSans', regular))
-            pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', bold))
-            registerFontFamily('DejaVu', normal='DejaVuSans', bold='DejaVuSans-Bold')
-            return True
-        except Exception as e:
-            return False
-    return False
+
+def get_turkish_font_paths():
+    """
+    Türkçe karakter destekli DejaVuSans ve DejaVuSans-Bold fontlarının
+    yerel tam yollarını bulur veya güvenilir CDN'den indirir.
+    """
+    candidate_pairs = [
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        (os.path.abspath("DejaVuSans.ttf"), os.path.abspath("DejaVuSans-Bold.ttf")),
+    ]
+
+    try:
+        import matplotlib
+        mpl_ttf_dir = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
+        candidate_pairs.insert(0, (
+            os.path.join(mpl_ttf_dir, "DejaVuSans.ttf"),
+            os.path.join(mpl_ttf_dir, "DejaVuSans-Bold.ttf"),
+        ))
+    except Exception:
+        pass
+
+    for reg_path, bold_path in candidate_pairs:
+        if _is_valid_ttf(reg_path) and _is_valid_ttf(bold_path):
+            return os.path.abspath(reg_path), os.path.abspath(bold_path)
+
+    # Yerelde bulunamazsa güvenilir jsDelivr CDN üzerinden indir
+    local_reg = os.path.abspath("DejaVuSans.ttf")
+    local_bold = os.path.abspath("DejaVuSans-Bold.ttf")
+
+    reg_ok = _is_valid_ttf(local_reg) or _download_font(
+        "https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSans.ttf",
+        local_reg,
+    )
+    bold_ok = _is_valid_ttf(local_bold) or _download_font(
+        "https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSans-Bold.ttf",
+        local_bold,
+    )
+
+    if reg_ok and bold_ok:
+        return local_reg, local_bold
+    return None, None
+
+
+def setup_fonts():
+    """
+    Fontları hem ReportLab çekirdeğine hem de xhtml2pdf DEFAULT_FONT haritasına kaydeder
+    ve HTML şablonu için @font-face CSS bloğunu döndürür.
+    """
+    reg_path, bold_path = get_turkish_font_paths()
+    if not reg_path or not bold_path:
+        return False, ""
+
+    try:
+        if "DejaVuSans" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("DejaVuSans", reg_path))
+        if "DejaVuSans-Bold" not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bold_path))
+        registerFontFamily("DejaVuSans", normal="DejaVuSans", bold="DejaVuSans-Bold")
+
+        DEFAULT_FONT["helvetica"] = "DejaVuSans"
+        DEFAULT_FONT["sans-serif"] = "DejaVuSans"
+
+        font_face_css = f"""
+        @font-face {{
+            font-family: "DejaVuSans";
+            src: url("{reg_path}");
+            font-weight: normal;
+            font-style: normal;
+        }}
+        @font-face {{
+            font-family: "DejaVuSans";
+            src: url("{bold_path}");
+            font-weight: bold;
+            font-style: normal;
+        }}
+        """
+        return True, font_face_css
+    except Exception:
+        return False, ""
+
 
 @st.cache_data
 def load_asm_mapping():
@@ -60,6 +128,7 @@ def load_asm_mapping():
         return mapping
     except Exception:
         return None
+
 
 @st.cache_data
 def load_data(files, asm_mapping):
@@ -169,6 +238,7 @@ def load_data(files, asm_mapping):
     combined_df['İlçe'] = combined_df['Birim Adı'].apply(get_district)
     return combined_df
 
+
 @st.cache_data
 def get_excel(df):
     output = io.BytesIO()
@@ -176,10 +246,10 @@ def get_excel(df):
         df.to_excel(writer, index=False, sheet_name='Sıralama')
     return output.getvalue()
 
-@st.cache_data
+
 def get_pdf(df, title):
-    fonts_loaded = setup_fonts()
-    font_family = "'DejaVu', Helvetica, Arial, sans-serif" if fonts_loaded else "Helvetica, Arial, sans-serif"
+    fonts_loaded, font_face_css = setup_fonts()
+    font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
     
     html_content = f"""
     <!DOCTYPE html>
@@ -187,12 +257,13 @@ def get_pdf(df, title):
     <head>
     <meta charset="UTF-8">
     <style>
+        {font_face_css}
         @page {{ size: A4; margin: 1cm; }}
         body {{ font-family: {font_family}; font-size: 10px; color: #333; }}
-        h2 {{ text-align: center; color: #333; }}
+        h2 {{ text-align: center; color: #333; font-family: {font_family}; }}
         table {{ border-collapse: collapse; width: 100%; }}
-        th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; }}
-        th {{ background-color: #f4f6f9; }}
+        th, td {{ border: 1px solid #ddd; padding: 5px; text-align: left; font-family: {font_family}; }}
+        th {{ background-color: #f4f6f9; font-weight: bold; }}
     </style>
     </head>
     <body>
@@ -205,9 +276,10 @@ def get_pdf(df, title):
     pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
 
+
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
-    fonts_loaded = setup_fonts()
-    font_family = "'DejaVu', Helvetica, Arial, sans-serif" if fonts_loaded else "Helvetica, Arial, sans-serif"
+    fonts_loaded, font_face_css = setup_fonts()
+    font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
     
     def get_month_num(m):
         match = re.search(r'^(\d+)', str(m))
@@ -237,14 +309,15 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     <head>
     <meta charset="UTF-8">
     <style>
+        {font_face_css}
         @page {{ size: A4; margin: 1cm; }}
         body {{ font-family: {font_family}; font-size: 10px; color: #333; }}
-        h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; }}
-        .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; }}
-        h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; }}
-        h3 {{ color: #16a085; font-size: 11px; margin-top: 10px; margin-bottom: 5px; }}
+        h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; font-family: {font_family}; }}
+        .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; font-family: {font_family}; }}
+        h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; font-family: {font_family}; }}
+        h3 {{ color: #16a085; font-size: 11px; margin-top: 10px; margin-bottom: 5px; font-family: {font_family}; }}
         table {{ border-collapse: collapse; width: 100%; margin-bottom: 5px; }}
-        th, td {{ border: 1px solid #bdc3c7; padding: 4px; font-size: 9px; }}
+        th, td {{ border: 1px solid #bdc3c7; padding: 4px; font-size: 9px; font-family: {font_family}; }}
         th {{ background-color: #ecf0f1; font-weight: bold; text-align: center; }}
         td {{ text-align: center; }}
         .left-align {{ text-align: left; }}
@@ -264,9 +337,9 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
                 <th>Kolorektal Taraması</th>
             </tr>
             <tr>
-                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #bdc3c7;'>İstanbul Sırası: {ilce_ozet['Mamografi Sıra']}.</span></td>
-                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #bdc3c7;'>İstanbul Sırası: {ilce_ozet['Serviks Sıra']}.</span></td>
-                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #bdc3c7;'>İstanbul Sırası: {ilce_ozet['Kolorektal Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Mamografi Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Serviks Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Kolorektal Sıra']}.</span></td>
             </tr>
         </table>
         
@@ -282,7 +355,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         s_oran = (asm_row['Serviks Yapılan'] / asm_row['Serviks Gereken'] * 100) if asm_row['Serviks Gereken'] > 0 else 0
         k_oran = (asm_row['Kolorektal Yapılan'] / asm_row['Kolorektal Gereken'] * 100) if asm_row['Kolorektal Gereken'] > 0 else 0
         
-        html_content += f"<h3>🏥 {asm_adi}</h3>"
+        html_content += f"<h3>[ASM] {asm_adi}</h3>"
         html_content += f"""
         <table style="background-color: #f8f9fa;">
             <tr>
@@ -315,6 +388,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     pdf_buffer = io.BytesIO()
     pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer, encoding='utf-8')
     return pdf_buffer.getvalue()
+
 
 st.title("📊 KAN-TAR Analiz Sistemi")
 
@@ -364,7 +438,6 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            # --- SEKMELER (TABS) GÜNCELLENDİ ---
             tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
                 "🎀 Mamografi Taraması", 
                 "🎗️ Serviks Taraması", 
@@ -411,12 +484,19 @@ if yuklenen_dosyalar:
                         x='İlçe', 
                         y='Genel Oran (%)', 
                         text='Genel Oran (%)',
-                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları",
+                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları (Hedef Çizgisi: %70)",
                         color='Genel Oran (%)',
                         color_continuous_scale='Blues'
                     )
                     fig_ilce.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
                     fig_ilce.update_layout(xaxis_tickangle=-45)
+                    fig_ilce.add_hline(
+                        y=70, 
+                        line_dash="dash", 
+                        line_color="red", 
+                        annotation_text="Bakanlık Hedefi (%70)", 
+                        annotation_position="top right"
+                    )
                     st.plotly_chart(fig_ilce, use_container_width=True)
 
                 ilce_grup_pdf = ilce_grup_sirali.copy()
@@ -432,7 +512,7 @@ if yuklenen_dosyalar:
                 with col1:
                     st.download_button("📥 Excel İndir (İlçe)", data=get_excel(ilce_grup_sirali), file_name=f"{tarama_turu}_Ilce_Siralama.xlsx", key=f"{tarama_turu}_ilce_ex")
                 with col2:
-                    st.download_button("📄 PDF İndir (İlçe)", data=get_pdf(ilce_grup_pdf, f"{ilce_baslik} - {tarama_turu} Ilce Siralamasi"), file_name=f"{tarama_turu}_Ilce_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_ilce_pdf")
+                    st.download_button("📄 PDF İndir (İlçe)", data=get_pdf(ilce_grup_pdf, f"{ilce_baslik} - {tarama_turu} İlçe Sıralaması"), file_name=f"{tarama_turu}_Ilce_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_ilce_pdf")
                 
                 st.markdown("---")
 
@@ -450,12 +530,19 @@ if yuklenen_dosyalar:
                         x='ASM Adı',
                         y=hedef_kolon,
                         text=hedef_kolon,
-                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları",
+                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları (Hedef Çizgisi: %70)",
                         color=hedef_kolon,
                         color_continuous_scale='Greens'
                     )
                     fig_asm.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
                     fig_asm.update_layout(xaxis_tickangle=-45)
+                    fig_asm.add_hline(
+                        y=70, 
+                        line_dash="dash", 
+                        line_color="red", 
+                        annotation_text="Bakanlık Hedefi (%70)", 
+                        annotation_position="top right"
+                    )
                     st.plotly_chart(fig_asm, use_container_width=True)
 
                 asm_grup_pdf = asm_grup_sirali.copy()
@@ -471,7 +558,7 @@ if yuklenen_dosyalar:
                 with col3:
                     st.download_button("📥 Excel İndir (ASM)", data=get_excel(asm_grup_sirali), file_name=f"{tarama_turu}_ASM_Siralama.xlsx", key=f"{tarama_turu}_asm_ex")
                 with col4:
-                    st.download_button("📄 PDF İndir (ASM)", data=get_pdf(asm_grup_pdf, f"{ilce_baslik} - {tarama_turu} ASM Siralamasi"), file_name=f"{tarama_turu}_ASM_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_asm_pdf")
+                    st.download_button("📄 PDF İndir (ASM)", data=get_pdf(asm_grup_pdf, f"{ilce_baslik} - {tarama_turu} ASM Sıralaması"), file_name=f"{tarama_turu}_ASM_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_asm_pdf")
 
                 st.markdown("---")
 
@@ -502,7 +589,7 @@ if yuklenen_dosyalar:
                     with col5:
                         st.download_button("📥 Excel İndir (Birim)", data=get_excel(gosterilecek_df), file_name=f"{tarama_turu}_Birim_Siralama.xlsx", key=f"{tarama_turu}_birim_ex")
                     with col6:
-                        st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazli Siralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
+                        st.download_button("📄 PDF İndir (Birim)", data=get_pdf(gosterilecek_pdf, f"{ilce_baslik} - {tarama_turu} Birim Bazlı Sıralama"), file_name=f"{tarama_turu}_Birim_Siralama.pdf", mime="application/pdf", key=f"{tarama_turu}_birim_pdf")
 
             with tab1:
                 tablo_goster("Mamografi")
@@ -578,7 +665,7 @@ if yuklenen_dosyalar:
                         categories=trend_grup['Dosya (Ay)'], 
                         ordered=True
                     )
-                    grafik_df = trend_grup.set_index('Ay_Label')[[ 'Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)' ]]
+                    grafik_df = trend_grup.set_index('Ay_Label')[['Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)']]
                     
                     st.markdown(f"#### 📊 {hedef_isim} - Tarama Oranları Değişimi")
                     st.line_chart(grafik_df)
@@ -608,22 +695,18 @@ if yuklenen_dosyalar:
                     metric_goster(col_s, "🎗️ Serviks", "Serviks Oranı (%)")
                     metric_goster(col_k, "🧬 Kolorektal", "Kolorektal Oranı (%)")
 
-            # --- YENİ EKLENEN TAB 6: ACİL MÜDAHALE (SIFIR TARAMA) ---
             with tab6:
                 st.subheader("🚨 Acil Müdahale Gerektiren Birimler (Tarama Yapılmayan / %0 Birimler)")
                 st.markdown("Bu sekmede, seçilen ilçe ve aylar kapsamında **herhangi bir tarama türünde yapılan sayısı 0 (oranı %0)** olan birimler listelenmektedir. Bu birimlerin acilen takibe alınması gerekmektedir.")
                 
-                # İlçe filtresi uygula
                 if secilen_ilce != "Tüm İlçeler":
                     acil_df_base = df_filtrelenmis_ay[df_filtrelenmis_ay['İlçe'] == secilen_ilce].copy()
                 else:
                     acil_df_base = df_filtrelenmis_ay.copy()
                 
-                # Her birim için satırları tarayıp sıfır olanları ayıralım
                 sifir_liste = []
                 
                 for _, row in acil_df_base.iterrows():
-                    # Mamografi sıfır mı? (Gereken > 0 ama Yapılan == 0)
                     if row.get('Mamografi Yapılan', 0) == 0:
                         sifir_liste.append({
                             'Dosya (Ay)': row['Dosya (Ay)'],
@@ -636,7 +719,6 @@ if yuklenen_dosyalar:
                             'Yapılan Sayı': 0
                         })
                     
-                    # Serviks sıfır mı?
                     if row.get('Serviks Yapılan', 0) == 0:
                         sifir_liste.append({
                             'Dosya (Ay)': row['Dosya (Ay)'],
@@ -649,7 +731,6 @@ if yuklenen_dosyalar:
                             'Yapılan Sayı': 0
                         })
                         
-                    # Kolorektal sıfır mı?
                     if row.get('Kolorektal Yapılan', 0) == 0:
                         sifir_liste.append({
                             'Dosya (Ay)': row['Dosya (Ay)'],
@@ -686,7 +767,7 @@ if yuklenen_dosyalar:
                     with col_pdf:
                         st.download_button(
                             "📄 PDF İndir (Acil Müdahale Listesi)", 
-                            data=get_pdf(df_sifir, "Acil Mudahale Gerektiren Sifir Tarama Birimleri"), 
+                            data=get_pdf(df_sifir, "Acil Müdahale Gerektiren Sıfır Tarama Birimleri"), 
                             file_name="Acil_Mudahale_Sifir_Taramalar.pdf", 
                             mime="application/pdf", 
                             key="acil_pdf_btn"
