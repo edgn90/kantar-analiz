@@ -7,7 +7,6 @@ import urllib.request
 import ssl
 import re
 import plotly.express as px
-import plotly.graph_objects as go
 from xhtml2pdf import pisa
 from xhtml2pdf.default import DEFAULT_FONT
 from reportlab.pdfbase import pdfmetrics
@@ -544,19 +543,12 @@ if yuklenen_dosyalar:
                         x='İlçe', 
                         y='Genel Oran (%)', 
                         text='Genel Oran (%)',
-                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları (Hedef Çizgisi: %70)",
+                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları",
                         color='Genel Oran (%)',
                         color_continuous_scale='Blues'
                     )
                     fig_ilce.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
                     fig_ilce.update_layout(xaxis_tickangle=-45)
-                    fig_ilce.add_hline(
-                        y=70, 
-                        line_dash="dash", 
-                        line_color="red", 
-                        annotation_text="Bakanlık Hedefi (%70)", 
-                        annotation_position="top right"
-                    )
                     st.plotly_chart(fig_ilce, use_container_width=True)
 
                 ilce_grup_pdf = ilce_grup_sirali.copy()
@@ -590,19 +582,12 @@ if yuklenen_dosyalar:
                         x='ASM Adı',
                         y=hedef_kolon,
                         text=hedef_kolon,
-                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları (Hedef Çizgisi: %70)",
+                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları",
                         color=hedef_kolon,
                         color_continuous_scale='Greens'
                     )
                     fig_asm.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
                     fig_asm.update_layout(xaxis_tickangle=-45)
-                    fig_asm.add_hline(
-                        y=70, 
-                        line_dash="dash", 
-                        line_color="red", 
-                        annotation_text="Bakanlık Hedefi (%70)", 
-                        annotation_position="top right"
-                    )
                     st.plotly_chart(fig_asm, use_container_width=True)
 
                 asm_grup_pdf = asm_grup_sirali.copy()
