@@ -308,7 +308,7 @@ def create_ilce_asm_chart_base64(ilce_detay, secilen_ilce, tarama_turu):
     fig_height = min(10.5, max(2.4, len(plot_df) * 0.34))
     fig, ax = plt.subplots(figsize=(8.2, fig_height), dpi=150)
 
-    bar_colors = ['#27ae60' if val >= 70 else ('#f39c12' if val >= 50 else '#c0392b') for val in plot_df['Oran (%)']]
+    bar_colors = ['#2980b9' if val >= 70 else ('#f39c12' if val >= 50 else '#c0392b') for val in plot_df['Oran (%)']]
     bars = ax.barh(plot_df['Sıralı ASM Etiketi'], plot_df['Oran (%)'], color=bar_colors, height=0.62)
 
     ax.axvline(70, color='#d63031', linestyle='--', linewidth=1.4, label='Bakanlık %70 Alt Sınır Hedefi')
