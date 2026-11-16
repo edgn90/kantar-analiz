@@ -381,7 +381,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; font-family: {font_family}; }}
         h3 {{ color: #16a085; font-size: 11px; margin-top: 10px; margin-bottom: 5px; font-family: {font_family}; }}
         table {{ border-collapse: collapse; width: 100%; margin-bottom: 5px; }}
-        th, td {{ border: 1px solid #bdc3c7; padding: 4px; font-size: 9px; font-family: {font_family}; }}
+        th, td {{ border: 1px solid #bdc3c7; padding: 3px; font-size: 8.5px; font-family: {font_family}; }}
         th {{ background-color: #ecf0f1; font-weight: bold; text-align: center; }}
         td {{ text-align: center; }}
         .left-align {{ text-align: left; }}
@@ -429,6 +429,13 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     
     for _, asm_row in asm_grup.iterrows():
         asm_adi = asm_row['ASM Adı']
+        asm_m_ger = int(round(asm_row['Mamografi Gereken']))
+        asm_m_yap = int(round(asm_row['Mamografi Yapılan']))
+        asm_s_ger = int(round(asm_row['Serviks Gereken']))
+        asm_s_yap = int(round(asm_row['Serviks Yapılan']))
+        asm_k_ger = int(round(asm_row['Kolorektal Gereken']))
+        asm_k_yap = int(round(asm_row['Kolorektal Yapılan']))
+
         m_oran = (asm_row['Mamografi Yapılan'] / asm_row['Mamografi Gereken'] * 100) if asm_row['Mamografi Gereken'] > 0 else 0
         s_oran = (asm_row['Serviks Yapılan'] / asm_row['Serviks Gereken'] * 100) if asm_row['Serviks Gereken'] > 0 else 0
         k_oran = (asm_row['Kolorektal Yapılan'] / asm_row['Kolorektal Gereken'] * 100) if asm_row['Kolorektal Gereken'] > 0 else 0
@@ -437,27 +444,55 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         html_content += f"""
         <table style="background-color: #f8f9fa;">
             <tr>
-                <td width="33%"><b>ASM Ort. Mamografi:</b> {format_oran(m_oran)}</td>
-                <td width="33%"><b>ASM Ort. Serviks:</b> {format_oran(s_oran)}</td>
-                <td width="33%"><b>ASM Ort. Kolorektal:</b> {format_oran(k_oran)}</td>
+                <td width="33%">
+                    <b>ASM Ort. Mamografi:</b> {format_oran(m_oran)}<br>
+                    <span style="font-size: 8px; color: #555;">Gereken: <b>{asm_m_ger}</b> | Yapılan: <b>{asm_m_yap}</b></span>
+                </td>
+                <td width="33%">
+                    <b>ASM Ort. Serviks:</b> {format_oran(s_oran)}<br>
+                    <span style="font-size: 8px; color: #555;">Gereken: <b>{asm_s_ger}</b> | Yapılan: <b>{asm_s_yap}</b></span>
+                </td>
+                <td width="33%">
+                    <b>ASM Ort. Kolorektal:</b> {format_oran(k_oran)}<br>
+                    <span style="font-size: 8px; color: #555;">Gereken: <b>{asm_k_ger}</b> | Yapılan: <b>{asm_k_yap}</b></span>
+                </td>
             </tr>
         </table>
         <table>
             <tr>
-                <th class="left-align" width="40%">Birim Adı</th>
-                <th width="20%">Mamografi (%)</th>
-                <th width="20%">Serviks (%)</th>
-                <th width="20%">Kolorektal (%)</th>
+                <th class="left-align" width="28%">Birim Adı</th>
+                <th colspan="3" width="24%">Mamografi</th>
+                <th colspan="3" width="24%">Serviks</th>
+                <th colspan="3" width="24%">Kolorektal</th>
+            </tr>
+            <tr>
+                <th class="left-align" width="28%"></th>
+                <th width="7%">Gereken</th>
+                <th width="7%">Yapılan</th>
+                <th width="10%">Oran (%)</th>
+                <th width="7%">Gereken</th>
+                <th width="7%">Yapılan</th>
+                <th width="10%">Oran (%)</th>
+                <th width="7%">Gereken</th>
+                <th width="7%">Yapılan</th>
+                <th width="10%">Oran (%)</th>
             </tr>
         """
         
         asm_birimler = ilce_detay[ilce_detay['ASM Adı'] == asm_adi].sort_values(by='Birim Adı')
         for _, birim_row in asm_birimler.iterrows():
+            m_ger = int(round(birim_row['Mamografi Gereken']))
+            m_yap = int(round(birim_row['Mamografi Yapılan']))
+            s_ger = int(round(birim_row['Serviks Gereken']))
+            s_yap = int(round(birim_row['Serviks Yapılan']))
+            k_ger = int(round(birim_row['Kolorektal Gereken']))
+            k_yap = int(round(birim_row['Kolorektal Yapılan']))
+
             html_content += "<tr>"
             html_content += f"<td class='left-align'>{str(birim_row['Birim Adı'])}</td>"
-            html_content += f"<td>{format_oran(birim_row['Mamografi Oranı'])}</td>"
-            html_content += f"<td>{format_oran(birim_row['Serviks Oranı'])}</td>"
-            html_content += f"<td>{format_oran(birim_row['Kolorektal Oranı'])}</td>"
+            html_content += f"<td>{m_ger}</td><td>{m_yap}</td><td>{format_oran(birim_row['Mamografi Oranı'])}</td>"
+            html_content += f"<td>{s_ger}</td><td>{s_yap}</td><td>{format_oran(birim_row['Serviks Oranı'])}</td>"
+            html_content += f"<td>{k_ger}</td><td>{k_yap}</td><td>{format_oran(birim_row['Kolorektal Oranı'])}</td>"
             html_content += "</tr>"
         html_content += "</table>"
         
@@ -701,7 +736,7 @@ if yuklenen_dosyalar:
                         "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
                     )
 
-                    zip_cache_key = f"toplu_zip_v3_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
+                    zip_cache_key = f"toplu_zip_v4_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
 
                     if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
                         if not mevcut_ilceler:
@@ -738,7 +773,7 @@ if yuklenen_dosyalar:
                     st.markdown("Rapor İçeriği:")
                     st.markdown("- **1.** İlçenin İstanbul genelindeki başarı sıralaması ve 3 Kanser türündeki özet oranı")
                     st.markdown("- **2.** 3 tarama türü için ASM'lerin **ilçe içi sırasını** ve **oranlarını** gösteren 3 ayrı grafik")
-                    st.markdown("- **3.** İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları ve altındaki AHB detay oranları")
+                    st.markdown("- **3.** İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ve altındaki AHB birimlerinin **gereken**, **yapılan** tarama sayıları ile **başarı oranları**")
                     st.markdown("- **%50'nin altında kalan oranlar için kırmızı uyarı vurgusu** ⚠️")
                     
                     with st.spinner("PDF Raporu Hazırlanıyor, lütfen bekleyin..."):
