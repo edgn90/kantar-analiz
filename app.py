@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import zipfile
 import urllib.request
 import ssl
 import re
@@ -275,16 +276,13 @@ def get_pdf(df, title):
     return pdf_buffer.getvalue()
 
 
-def get_ilce_rapor_pdf(df, df_aylik, secilen_ilce, secilen_aylar):
+def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     fonts_loaded, font_face_css = setup_fonts()
     font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
     
     def get_month_num(m):
         match = re.search(r'^(\d+)', str(m))
         return int(match.group(1)) if match else 99
-
-    def clean_month_label(filename):
-        return str(filename).replace('.xlsx', '').replace('.xls', '').replace('Birim Bazında', '').strip()
     
     sirali_aylar = sorted(secilen_aylar, key=get_month_num)
     aylar_str = ", ".join(sirali_aylar)
@@ -317,7 +315,6 @@ def get_ilce_rapor_pdf(df, df_aylik, secilen_ilce, secilen_aylar):
         .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; font-family: {font_family}; }}
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; font-family: {font_family}; }}
         h3 {{ color: #16a085; font-size: 11px; margin-top: 10px; margin-bottom: 5px; font-family: {font_family}; }}
-        h3.acil-baslik {{ color: #c0392b; font-size: 11px; margin-top: 10px; margin-bottom: 4px; font-family: {font_family}; }}
         table {{ border-collapse: collapse; width: 100%; margin-bottom: 5px; }}
         th, td {{ border: 1px solid #bdc3c7; padding: 4px; font-size: 9px; font-family: {font_family}; }}
         th {{ background-color: #ecf0f1; font-weight: bold; text-align: center; }}
@@ -325,10 +322,6 @@ def get_ilce_rapor_pdf(df, df_aylik, secilen_ilce, secilen_aylar):
         .left-align {{ text-align: left; }}
         .summary-table th {{ background-color: #34495e; color: white; }}
         .summary-table td {{ font-size: 11px; padding: 8px; }}
-        .acil-table th {{ background-color: #fadbd8; color: #78281f; border-color: #e6b0aa; }}
-        .acil-table td {{ border-color: #e6b0aa; }}
-        .acil-vurgulu {{ color: #c0392b; font-weight: bold; }}
-        .temiz-not {{ color: #16a085; font-size: 9.5px; margin: 3px 0 8px 0; }}
     </style>
     </head>
     <body>
@@ -349,59 +342,7 @@ def get_ilce_rapor_pdf(df, df_aylik, secilen_ilce, secilen_aylar):
             </tr>
         </table>
         
-        <h2>2. Acil Müdahale Gerektiren Birimler (Sıfır Tarama Listesi)</h2>
-    """
-
-    ilce_aylik = df_aylik[df_aylik['İlçe'] == secilen_ilce].copy()
-    ilce_aylik['Ay_Sira'] = ilce_aylik['Dosya (Ay)'].apply(get_month_num)
-    ilce_aylik['Ay_Temiz'] = ilce_aylik['Dosya (Ay)'].apply(clean_month_label)
-    ilce_aylik = ilce_aylik.sort_values(['Ay_Sira', 'Dosya (Ay)'])
-
-    for tarama_turu in ['Mamografi', 'Serviks', 'Kolorektal']:
-        yapilan_col = f"{tarama_turu} Yapılan"
-        gereken_col = f"{tarama_turu} Gereken"
-
-        df_zero = ilce_aylik[ilce_aylik[yapilan_col] == 0]
-        html_content += f"<h3 class='acil-baslik'>[ACİL] {tarama_turu} Taraması - Sıfır Tarama Yapan Birimler</h3>"
-
-        if df_zero.empty:
-            html_content += "<p class='temiz-not'>Bu tarama türünde seçili dönemlerde sıfır tarama yapan birim bulunmamaktadır.</p>"
-        else:
-            df_zero_ozet = df_zero.groupby(['ASM Adı', 'Birim Adı'], as_index=False).agg(
-                **{
-                    'Sıfır Ay Sayısı': ('Dosya (Ay)', 'nunique'),
-                    'Sıfır Olduğu Aylar': ('Ay_Temiz', lambda x: ', '.join(dict.fromkeys(x))),
-                    'Toplam Gereken Hedef': (gereken_col, 'sum')
-                }
-            ).sort_values(
-                by=['Sıfır Ay Sayısı', 'Toplam Gereken Hedef', 'ASM Adı', 'Birim Adı'],
-                ascending=[False, False, True, True]
-            ).reset_index(drop=True)
-
-            html_content += """
-            <table class="acil-table">
-                <tr>
-                    <th width="6%">Sıra</th>
-                    <th class="left-align" width="26%">ASM Adı</th>
-                    <th class="left-align" width="28%">Birim Adı</th>
-                    <th width="10%">Sıfır Ay Sayısı</th>
-                    <th class="left-align" width="18%">Sıfır Olduğu Aylar</th>
-                    <th width="12%">Gereken Hedef</th>
-                </tr>
-            """
-            for idx, z_row in df_zero_ozet.iterrows():
-                html_content += "<tr>"
-                html_content += f"<td>{idx + 1}</td>"
-                html_content += f"<td class='left-align'>{str(z_row['ASM Adı'])}</td>"
-                html_content += f"<td class='left-align'>{str(z_row['Birim Adı'])}</td>"
-                html_content += f"<td class='acil-vurgulu'>{int(z_row['Sıfır Ay Sayısı'])}</td>"
-                html_content += f"<td class='left-align acil-vurgulu'>{str(z_row['Sıfır Olduğu Aylar'])}</td>"
-                html_content += f"<td>{int(round(z_row['Toplam Gereken Hedef']))}</td>"
-                html_content += "</tr>"
-            html_content += "</table>"
-
-    html_content += """
-        <h2>3. ASM ve Birim (AHB) Bazlı Kırılımlar</h2>
+        <h2>2. ASM ve Birim (AHB) Bazlı Kırılımlar</h2>
     """
     
     asm_grup = ilce_detay.groupby('ASM Adı')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
@@ -650,18 +591,60 @@ if yuklenen_dosyalar:
                 sirali_ay_isimleri = sorted(secilen_aylar, key=get_month_num)
 
                 if secilen_ilce == "Tüm İlçeler":
-                    st.info("👈 İlçe bazlı PDF raporu oluşturabilmek için lütfen sol menüden belirli bir ilçeyi seçin ve Çalıştır'a basın.")
+                    st.subheader("📦 Tüm İlçeler İçin Toplu PDF Raporu (.ZIP)")
+                    
+                    mevcut_ilceler = sorted([
+                        ilce for ilce in df['İlçe'].unique() 
+                        if ilce != "Diğer/Kurum Tabiplikleri"
+                    ])
+                    
+                    st.markdown(
+                        f"Sol menüden belirli bir ilçe seçilmediği için seçili **{', '.join(sirali_ay_isimleri)}** dönemleri kapsamında "
+                        f"veride yer alan **{len(mevcut_ilceler)} ilçenin** tamamına ait ayrı ayrı hazırlanmış Türkçe karakter uyumlu "
+                        "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
+                    )
+
+                    zip_cache_key = f"toplu_zip_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
+
+                    if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
+                        if not mevcut_ilceler:
+                            st.warning("Rapor oluşturulacak geçerli ilçe verisi bulunamadı.")
+                        else:
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            zip_buffer = io.BytesIO()
+                            
+                            with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                                toplam_ilce = len(mevcut_ilceler)
+                                for idx, ilce_adi in enumerate(mevcut_ilceler, start=1):
+                                    status_text.text(f"PDF hazırlanıyor ({idx}/{toplam_ilce}): {ilce_adi} İlçesi...")
+                                    ilce_pdf_bytes = get_ilce_rapor_pdf(df, ilce_adi, secilen_aylar)
+                                    zf.writestr(f"{ilce_adi}_Ilce_KANTAR_Raporu.pdf", ilce_pdf_bytes)
+                                    progress_bar.progress(idx / toplam_ilce)
+                            
+                            status_text.empty()
+                            progress_bar.empty()
+                            st.session_state[zip_cache_key] = zip_buffer.getvalue()
+
+                    if zip_cache_key in st.session_state:
+                        st.success(f"✅ {len(mevcut_ilceler)} ilçe için PDF raporları arşivlendi ve indirilmeye hazır!")
+                        st.download_button(
+                            label="📥 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)",
+                            data=st.session_state[zip_cache_key],
+                            file_name="Tum_Ilceler_KANTAR_Raporlari.zip",
+                            mime="application/zip",
+                            key="toplu_zip_indir_btn"
+                        )
                 else:
                     st.subheader(f"📑 {secilen_ilce} İlçesi Özel Değerlendirme Raporu")
                     st.markdown(f"Bu rapor **{', '.join(sirali_ay_isimleri)}** dönemlerini kapsamaktadır.")
                     st.markdown("Rapor İçeriği:")
                     st.markdown("- **1.** İlçenin İstanbul genelindeki başarı sıralaması ve 3 Kanser türündeki özet oranı")
-                    st.markdown("- **2.** **Acil Müdahale (Sıfır Tarama) Yapan Birimler** (Tarama türüne göre sıfır yapılan aylar, kaç kez sıfır yapıldığı ve gereken hedef) 🚨")
-                    st.markdown("- **3.** İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları ve altındaki AHB detay oranları")
+                    st.markdown("- **2.** İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları ve altındaki AHB detay oranları")
                     st.markdown("- **%50'nin altında kalan oranlar için kırmızı uyarı vurgusu** ⚠️")
                     
                     with st.spinner("PDF Raporu Hazırlanıyor, lütfen bekleyin..."):
-                        pdf_data = get_ilce_rapor_pdf(df, df_filtrelenmis_ay, secilen_ilce, secilen_aylar)
+                        pdf_data = get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar)
                     
                     st.download_button(
                         label=f"📥 {secilen_ilce} Raporunu İndir (PDF)",
