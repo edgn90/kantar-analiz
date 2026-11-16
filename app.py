@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import base64
 import zipfile
 import urllib.request
 import ssl
@@ -12,6 +13,16 @@ from xhtml2pdf.default import DEFAULT_FONT
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+    HAS_MATPLOTLIB = True
+except Exception:
+    HAS_MATPLOTLIB = False
 
 # Sayfa Ayarları
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
@@ -51,7 +62,6 @@ def get_turkish_font_paths():
     ]
 
     try:
-        import matplotlib
         mpl_ttf_dir = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
         candidate_pairs.insert(0, (
             os.path.join(mpl_ttf_dir, "DejaVuSans.ttf"),
@@ -276,6 +286,61 @@ def get_pdf(df, title):
     return pdf_buffer.getvalue()
 
 
+def build_ilce_asm_ranking_df(ilce_detay, tarama_turu):
+    gereken_col = f"{tarama_turu} Gereken"
+    yapilan_col = f"{tarama_turu} Yapılan"
+    asm_df = ilce_detay.groupby('ASM Adı', as_index=False)[[gereken_col, yapilan_col]].sum()
+    asm_df['Oran (%)'] = (asm_df[yapilan_col] / asm_df[gereken_col] * 100).fillna(0)
+    asm_df = asm_df.sort_values(by=['Oran (%)', 'ASM Adı'], ascending=[False, True]).reset_index(drop=True)
+    asm_df['İlçe İçi Sıra'] = asm_df.index + 1
+    asm_df['Sıralı ASM Etiketi'] = asm_df.apply(lambda r: f"{int(r['İlçe İçi Sıra'])}. {r['ASM Adı']}", axis=1)
+    return asm_df
+
+
+def create_ilce_asm_chart_base64(ilce_detay, secilen_ilce, tarama_turu):
+    if not HAS_MATPLOTLIB:
+        return None
+    asm_df = build_ilce_asm_ranking_df(ilce_detay, tarama_turu)
+    if asm_df.empty:
+        return None
+
+    plot_df = asm_df.iloc[::-1]
+    fig_height = min(10.5, max(2.4, len(plot_df) * 0.34))
+    fig, ax = plt.subplots(figsize=(8.2, fig_height), dpi=150)
+
+    bar_colors = ['#27ae60' if val >= 70 else ('#f39c12' if val >= 50 else '#c0392b') for val in plot_df['Oran (%)']]
+    bars = ax.barh(plot_df['Sıralı ASM Etiketi'], plot_df['Oran (%)'], color=bar_colors, height=0.62)
+
+    ax.axvline(70, color='#d63031', linestyle='--', linewidth=1.4, label='Bakanlık %70 Alt Sınır Hedefi')
+    ax.set_xlim(0, max(105, plot_df['Oran (%)'].max() + 14))
+    ax.set_xlabel('Başarı Oranı (%)', fontsize=8.5)
+    ax.set_title(f"{secilen_ilce} İlçesi - {tarama_turu} Taraması ASM İlçe İçi Sıralaması ve Oranları", fontsize=10, fontweight='bold', pad=8)
+    ax.tick_params(axis='both', labelsize=8)
+    ax.grid(axis='x', linestyle=':', alpha=0.5)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    for bar, val in zip(bars, plot_df['Oran (%)']):
+        ax.text(
+            val + 1.2,
+            bar.get_y() + bar.get_height() / 2,
+            f"%{val:.2f}",
+            va='center',
+            ha='left',
+            fontsize=8,
+            fontweight='bold',
+            color='#2c3e50'
+        )
+
+    ax.legend(loc='lower right', fontsize=8, frameon=True)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     fonts_loaded, font_face_css = setup_fonts()
     font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
@@ -322,6 +387,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         .left-align {{ text-align: left; }}
         .summary-table th {{ background-color: #34495e; color: white; }}
         .summary-table td {{ font-size: 11px; padding: 8px; }}
+        .chart-box {{ text-align: center; margin-top: 8px; margin-bottom: 12px; }}
     </style>
     </head>
     <body>
@@ -342,7 +408,20 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
             </tr>
         </table>
         
-        <h2>2. ASM ve Birim (AHB) Bazlı Kırılımlar</h2>
+        <h2>2. ASM İlçe İçi Sıralaması ve Başarı Oranları Grafikleri</h2>
+    """
+
+    for tarama_turu in ['Mamografi', 'Serviks', 'Kolorektal']:
+        chart_b64 = create_ilce_asm_chart_base64(ilce_detay, secilen_ilce, tarama_turu)
+        if chart_b64:
+            html_content += f"""
+            <div class="chart-box">
+                <img src="data:image/png;base64,{chart_b64}" width="530" />
+            </div>
+            """
+
+    html_content += """
+        <h2>3. ASM ve Birim (AHB) Bazlı Kırılımlar</h2>
     """
     
     asm_grup = ilce_detay.groupby('ASM Adı')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
@@ -478,17 +557,26 @@ if yuklenen_dosyalar:
                 ilce_grup_sirali.index += 1
                 
                 if secilen_ilce == "Tüm İlçeler":
+                    max_y_ilce = max(100, float(ilce_grup_sirali['Genel Oran (%)'].max()) * 1.12)
                     fig_ilce = px.bar(
                         ilce_grup_sirali, 
                         x='İlçe', 
                         y='Genel Oran (%)', 
                         text='Genel Oran (%)',
-                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları",
+                        title=f"İlçelere Göre {tarama_turu} Başarı Oranları (Bakanlık %70 Alt Sınır Hedefi)",
                         color='Genel Oran (%)',
                         color_continuous_scale='Blues'
                     )
                     fig_ilce.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-                    fig_ilce.update_layout(xaxis_tickangle=-45)
+                    fig_ilce.update_layout(xaxis_tickangle=-45, yaxis_range=[0, max_y_ilce])
+                    fig_ilce.add_hline(
+                        y=70,
+                        line_dash="dash",
+                        line_color="red",
+                        line_width=2,
+                        annotation_text="Bakanlık %70 Alt Sınır Hedefi",
+                        annotation_position="top right"
+                    )
                     st.plotly_chart(fig_ilce, use_container_width=True)
 
                 ilce_grup_pdf = ilce_grup_sirali.copy()
@@ -517,17 +605,26 @@ if yuklenen_dosyalar:
                 asm_grup_sirali.index += 1
                 
                 if not asm_grup_sirali.empty:
+                    max_y_asm = max(100, float(asm_grup_sirali[hedef_kolon].max()) * 1.12)
                     fig_asm = px.bar(
                         asm_grup_sirali,
                         x='ASM Adı',
                         y=hedef_kolon,
                         text=hedef_kolon,
-                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları",
+                        title=f"{ilce_baslik} - ASM Bazlı {tarama_turu} Başarı Oranları (Bakanlık %70 Alt Sınır Hedefi)",
                         color=hedef_kolon,
                         color_continuous_scale='Greens'
                     )
                     fig_asm.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
-                    fig_asm.update_layout(xaxis_tickangle=-45)
+                    fig_asm.update_layout(xaxis_tickangle=-45, yaxis_range=[0, max_y_asm])
+                    fig_asm.add_hline(
+                        y=70,
+                        line_dash="dash",
+                        line_color="red",
+                        line_width=2,
+                        annotation_text="Bakanlık %70 Alt Sınır Hedefi",
+                        annotation_position="top right"
+                    )
                     st.plotly_chart(fig_asm, use_container_width=True)
 
                 asm_grup_pdf = asm_grup_sirali.copy()
@@ -604,7 +701,7 @@ if yuklenen_dosyalar:
                         "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
                     )
 
-                    zip_cache_key = f"toplu_zip_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
+                    zip_cache_key = f"toplu_zip_v3_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
 
                     if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
                         if not mevcut_ilceler:
@@ -640,7 +737,8 @@ if yuklenen_dosyalar:
                     st.markdown(f"Bu rapor **{', '.join(sirali_ay_isimleri)}** dönemlerini kapsamaktadır.")
                     st.markdown("Rapor İçeriği:")
                     st.markdown("- **1.** İlçenin İstanbul genelindeki başarı sıralaması ve 3 Kanser türündeki özet oranı")
-                    st.markdown("- **2.** İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları ve altındaki AHB detay oranları")
+                    st.markdown("- **2.** 3 tarama türü için ASM'lerin **ilçe içi sırasını** ve **oranlarını** gösteren 3 ayrı grafik")
+                    st.markdown("- **3.** İlçeye bağlı tüm Aile Sağlığı Merkezlerinin (ASM) ortalama oranları ve altındaki AHB detay oranları")
                     st.markdown("- **%50'nin altında kalan oranlar için kırmızı uyarı vurgusu** ⚠️")
                     
                     with st.spinner("PDF Raporu Hazırlanıyor, lütfen bekleyin..."):
@@ -652,6 +750,46 @@ if yuklenen_dosyalar:
                         file_name=f"{secilen_ilce}_Ilce_KANTAR_Raporu.pdf",
                         mime="application/pdf"
                     )
+
+                    st.markdown("---")
+                    st.markdown(f"### 📊 {secilen_ilce} İlçesi - ASM İlçe İçi Sıralaması ve Oranları")
+                    ilce_detay_ui = df[df['İlçe'] == secilen_ilce].copy()
+
+                    for ikon, tarama_turu, renk_skalasi in [
+                        ("🎀", "Mamografi", "Blues"),
+                        ("🎗️", "Serviks", "Purples"),
+                        ("🧬", "Kolorektal", "Greens"),
+                    ]:
+                        asm_rank_df = build_ilce_asm_ranking_df(ilce_detay_ui, tarama_turu)
+                        if not asm_rank_df.empty:
+                            plot_rank_df = asm_rank_df.iloc[::-1]
+                            max_x_val = max(100, float(plot_rank_df['Oran (%)'].max()) * 1.15)
+                            fig_ilce_asm = px.bar(
+                                plot_rank_df,
+                                x='Oran (%)',
+                                y='Sıralı ASM Etiketi',
+                                orientation='h',
+                                text='Oran (%)',
+                                title=f"{ikon} {secilen_ilce} İlçesi - {tarama_turu} Taraması ASM İlçe İçi Sıralaması ve Oranları",
+                                color='Oran (%)',
+                                color_continuous_scale=renk_skalasi,
+                                labels={'Sıralı ASM Etiketi': 'İlçe İçi Sıra ve ASM Adı', 'Oran (%)': 'Başarı Oranı (%)'}
+                            )
+                            fig_ilce_asm.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
+                            fig_ilce_asm.update_layout(
+                                xaxis_range=[0, max_x_val],
+                                height=max(320, len(plot_rank_df) * 34),
+                                showlegend=False
+                            )
+                            fig_ilce_asm.add_vline(
+                                x=70,
+                                line_dash="dash",
+                                line_color="red",
+                                line_width=2,
+                                annotation_text="Bakanlık %70 Alt Sınır Hedefi",
+                                annotation_position="top right"
+                            )
+                            st.plotly_chart(fig_ilce_asm, use_container_width=True)
                     
             with tab5:
                 st.subheader("📈 Aylık Trend ve Gelişim Analizi")
@@ -687,15 +825,33 @@ if yuklenen_dosyalar:
                     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                         trend_grup[f'{t} Oranı (%)'] = (trend_grup[f'{t} Yapılan'] / trend_grup[f'{t} Gereken'] * 100).fillna(0)
                     
-                    trend_grup['Ay_Label'] = pd.Categorical(
-                        trend_grup['Dosya (Ay)'], 
-                        categories=trend_grup['Dosya (Ay)'], 
-                        ordered=True
+                    trend_uzun_df = trend_grup.melt(
+                        id_vars=['Dosya (Ay)'],
+                        value_vars=['Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)'],
+                        var_name='Tarama Türü',
+                        value_name='Başarı Oranı (%)'
                     )
-                    grafik_df = trend_grup.set_index('Ay_Label')[['Mamografi Oranı (%)', 'Serviks Oranı (%)', 'Kolorektal Oranı (%)']]
-                    
+                    max_y_trend = max(100, float(trend_uzun_df['Başarı Oranı (%)'].max()) * 1.12)
+
                     st.markdown(f"#### 📊 {hedef_isim} - Tarama Oranları Değişimi")
-                    st.line_chart(grafik_df)
+                    fig_trend = px.line(
+                        trend_uzun_df,
+                        x='Dosya (Ay)',
+                        y='Başarı Oranı (%)',
+                        color='Tarama Türü',
+                        markers=True,
+                        title=f"{hedef_isim} - Aylık Tarama Oranları Değişimi (Bakanlık %70 Alt Sınır Hedefi)"
+                    )
+                    fig_trend.update_layout(yaxis_range=[0, max_y_trend])
+                    fig_trend.add_hline(
+                        y=70,
+                        line_dash="dash",
+                        line_color="red",
+                        line_width=2,
+                        annotation_text="Bakanlık %70 Alt Sınır Hedefi",
+                        annotation_position="top right"
+                    )
+                    st.plotly_chart(fig_trend, use_container_width=True)
                     
                     st.markdown("#### 💡 Son Durum ve Otomatik İçgörüler")
                     
