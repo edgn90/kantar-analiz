@@ -8,6 +8,7 @@ import urllib.request
 import ssl
 import re
 import plotly.express as px
+from PIL import Image
 from xhtml2pdf import pisa
 from xhtml2pdf.default import DEFAULT_FONT
 from reportlab.pdfbase import pdfmetrics
@@ -127,6 +128,57 @@ def setup_fonts():
         return True, font_face_css
     except Exception:
         return False, ""
+
+
+def _image_bytes_to_png_base64(raw_bytes):
+    """
+    Görseli xhtml2pdf ile %100 uyumlu PNG formatına dönüştürüp base64 string olarak döndürür.
+    """
+    try:
+        img = Image.open(io.BytesIO(raw_bytes))
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            img = Image.alpha_composite(bg, img).convert("RGB")
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception:
+        return None
+
+
+def get_kantar_logo_base64(uploaded_logo=None):
+    """
+    Önce kenar çubuğundan yüklenen logoyu, yoksa proje klasöründeki logo dosyasını okur.
+    """
+    if uploaded_logo is not None:
+        try:
+            b64 = _image_bytes_to_png_base64(uploaded_logo.getvalue())
+            if b64:
+                return b64
+        except Exception:
+            pass
+
+    candidate_files = [
+        "kantar_logo.png",
+        "kantar_logo.jpg",
+        "kantar_logo.jpeg",
+        "logo.png",
+        "logo.jpg",
+        "ChatGPT Görseli 16 Kas 2026 16_48_14.png",
+    ]
+    for fname in candidate_files:
+        if os.path.exists(fname):
+            try:
+                with open(fname, "rb") as f:
+                    b64 = _image_bytes_to_png_base64(f.read())
+                if b64:
+                    return b64
+            except Exception:
+                continue
+    return None
 
 
 @st.cache_data
@@ -341,7 +393,7 @@ def create_ilce_asm_chart_base64(ilce_detay, secilen_ilce, tarama_turu):
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
-def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
+def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
     fonts_loaded, font_face_css = setup_fonts()
     font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
     
@@ -367,6 +419,27 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
             return f"<span style='color: red; font-weight: bold;'>%{oran:.2f} (Uyarı)</span>"
         return f"%{oran:.2f}"
 
+    if logo_b64:
+        ust_baslik_html = f"""
+        <table class="top-header-table">
+            <tr>
+                <td width="18%" style="border: none;"></td>
+                <td width="64%" style="border: none; text-align: center; vertical-align: middle;">
+                    <h1 style="margin: 0 0 4px 0;">{secilen_ilce} İlçesi KAN-TAR Değerlendirme Raporu</h1>
+                    <div class="header-info" style="margin: 0;"><b>Kapsanan Aylar:</b> {aylar_str}</div>
+                </td>
+                <td width="18%" style="border: none; text-align: right; vertical-align: top; padding: 0;">
+                    <img src="data:image/png;base64,{logo_b64}" width="105" />
+                </td>
+            </tr>
+        </table>
+        """
+    else:
+        ust_baslik_html = f"""
+        <h1>{secilen_ilce} İlçesi KAN-TAR Değerlendirme Raporu</h1>
+        <div class="header-info"><b>Kapsanan Aylar:</b> {aylar_str}</div>
+        """
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="tr">
@@ -376,6 +449,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
         {font_face_css}
         @page {{ size: A4; margin: 1cm; }}
         body {{ font-family: {font_family}; font-size: 10px; color: #333; }}
+        .top-header-table {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; }}
         h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 5px; font-family: {font_family}; }}
         .header-info {{ text-align: center; font-size: 11px; margin-bottom: 20px; color: #7f8c8d; font-family: {font_family}; }}
         h2 {{ color: #34495e; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-top: 15px; font-family: {font_family}; }}
@@ -391,8 +465,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar):
     </style>
     </head>
     <body>
-        <h1>{secilen_ilce} İlçesi KAN-TAR Değerlendirme Raporu</h1>
-        <div class="header-info"><b>Kapsanan Aylar:</b> {aylar_str}</div>
+        {ust_baslik_html}
         
         <h2>1. İlçe Genel Durumu ve İstanbul Sıralaması</h2>
         <table class="summary-table">
@@ -509,6 +582,8 @@ asm_mapping = load_asm_mapping()
 
 st.sidebar.header("1. Veri Yükleme")
 yuklenen_dosyalar = st.sidebar.file_uploader("KAN-TAR Excel Dosyalarını Yükleyin", type=["xlsx", "xls"], accept_multiple_files=True)
+yuklenen_logo = st.sidebar.file_uploader("İlçe Raporu Logosu (Opsiyonel)", type=["png", "jpg", "jpeg"])
+kantar_logo_b64 = get_kantar_logo_base64(yuklenen_logo)
 
 if yuklenen_dosyalar:
     try:
@@ -721,6 +796,7 @@ if yuklenen_dosyalar:
                     return int(match.group(1)) if match else 99
 
                 sirali_ay_isimleri = sorted(secilen_aylar, key=get_month_num)
+                logo_hash = len(kantar_logo_b64) if kantar_logo_b64 else 0
 
                 if secilen_ilce == "Tüm İlçeler":
                     st.subheader("📦 Tüm İlçeler İçin Toplu PDF Raporu (.ZIP)")
@@ -736,7 +812,7 @@ if yuklenen_dosyalar:
                         "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
                     )
 
-                    zip_cache_key = f"toplu_zip_v4_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}"
+                    zip_cache_key = f"toplu_zip_v5_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
 
                     if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
                         if not mevcut_ilceler:
@@ -750,7 +826,7 @@ if yuklenen_dosyalar:
                                 toplam_ilce = len(mevcut_ilceler)
                                 for idx, ilce_adi in enumerate(mevcut_ilceler, start=1):
                                     status_text.text(f"PDF hazırlanıyor ({idx}/{toplam_ilce}): {ilce_adi} İlçesi...")
-                                    ilce_pdf_bytes = get_ilce_rapor_pdf(df, ilce_adi, secilen_aylar)
+                                    ilce_pdf_bytes = get_ilce_rapor_pdf(df, ilce_adi, secilen_aylar, logo_b64=kantar_logo_b64)
                                     zf.writestr(f"{ilce_adi}_Ilce_KANTAR_Raporu.pdf", ilce_pdf_bytes)
                                     progress_bar.progress(idx / toplam_ilce)
                             
@@ -777,7 +853,7 @@ if yuklenen_dosyalar:
                     st.markdown("- **%50'nin altında kalan oranlar için kırmızı uyarı vurgusu** ⚠️")
                     
                     with st.spinner("PDF Raporu Hazırlanıyor, lütfen bekleyin..."):
-                        pdf_data = get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar)
+                        pdf_data = get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=kantar_logo_b64)
                     
                     st.download_button(
                         label=f"📥 {secilen_ilce} Raporunu İndir (PDF)",
