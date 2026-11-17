@@ -792,31 +792,6 @@ if yuklenen_dosyalar:
             
             calistir_butonu = st.form_submit_button(label="Çalıştır 🚀")
 
-        # --- EŞLEŞMEYEN / YENİ AHB BİRİMLERİ UYARISI ---
-        if asm_mapping is not None:
-            eslesmeyen_ham = df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"].copy()
-            if not eslesmeyen_ham.empty:
-                eslesmeyen_ozet = eslesmeyen_ham.groupby(['İlçe', 'Birim Adı', 'Birim ID'], as_index=False).agg(
-                    **{
-                        'Görüldüğü Aylar': ('Dosya (Ay)', lambda x: ', '.join(sort_month_labels(list(dict.fromkeys(x)))))
-                    }
-                ).sort_values(by=['İlçe', 'Birim Adı']).reset_index(drop=True)
-                eslesmeyen_ozet.index += 1
-
-                st.warning(
-                    f"⚠️ `ASM_AHB_Eslestirme.xlsx` listesinde eşleşmeyen **{len(eslesmeyen_ozet)}** adet yeni/farklı AHB birimi tespit edildi. "
-                    "Bu birimler raporlarda **'Bilinmeyen/Eksik ASM'** başlığı altında toplanmıştır."
-                )
-                with st.expander(f"🔍 Eşleşmeyen / Yeni AHB Birimlerini Görüntüle ve İndir ({len(eslesmeyen_ozet)} Birim)"):
-                    st.markdown("Eşleştirme tablonuzu (`ASM_AHB_Eslestirme.xlsx`) güncellemek için aşağıdaki listeyi inceleyebilir veya Excel olarak indirebilirsiniz:")
-                    st.dataframe(eslesmeyen_ozet, use_container_width=True)
-                    st.download_button(
-                        label="📥 Eşleşmeyen AHB Birimlerini İndir (Excel)",
-                        data=get_excel(eslesmeyen_ozet),
-                        file_name="Eslesmeyen_Yeni_AHB_Birimleri.xlsx",
-                        key="eslesmeyen_ahb_excel_btn"
-                    )
-
         if secilen_aylar:
             df_filtrelenmis_ay = df_ham[df_ham['Dosya (Ay)'].isin(secilen_aylar)]
             
@@ -833,13 +808,24 @@ if yuklenen_dosyalar:
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
                 df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
 
-            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            eslesmeyen_sayisi = (
+                int(df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"]['Birim Adı'].nunique())
+                if asm_mapping is not None else 0
+            )
+            tab7_baslik = (
+                f"⚠️ Eşleşmeyen AHB ({eslesmeyen_sayisi})"
+                if eslesmeyen_sayisi > 0
+                else "🔍 Eşleşmeyen / Yeni AHB"
+            )
+
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
                 "🎀 Mamografi Taraması", 
                 "🎗️ Serviks Taraması", 
                 "🧬 Kolorektal Taraması", 
                 "📑 İlçe Bazlı Rapor", 
                 "📈 Aylık Trend",
-                "🚨 Acil Müdahale (Sıfır Tarama)"
+                "🚨 Acil Müdahale (Sıfır Tarama)",
+                tab7_baslik
             ])
 
             def tablo_goster(tarama_turu):
@@ -1267,6 +1253,35 @@ if yuklenen_dosyalar:
                     acil_tarama_tablosu_goster("Serviks")
                 with subtab_k:
                     acil_tarama_tablosu_goster("Kolorektal")
+
+            with tab7:
+                st.subheader("🔍 Eşleşmeyen / Yeni AHB Birimleri Kontrolü")
+                if asm_mapping is None:
+                    st.warning("⚠️ Sistemde `ASM_AHB_Eslestirme.xlsx` dosyası bulunamadığı için ASM eşleştirme kontrolü yapılamadı.")
+                else:
+                    eslesmeyen_ham = df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"].copy()
+                    if eslesmeyen_ham.empty:
+                        st.success("🎉 Tebrikler! Yüklenen dosyalardaki tüm AHB birimleri `ASM_AHB_Eslestirme.xlsx` listesiyle eksiksiz eşleşti.")
+                    else:
+                        eslesmeyen_ozet = eslesmeyen_ham.groupby(['İlçe', 'Birim Adı', 'Birim ID'], as_index=False).agg(
+                            **{
+                                'Görüldüğü Aylar': ('Dosya (Ay)', lambda x: ', '.join(sort_month_labels(list(dict.fromkeys(x)))))
+                            }
+                        ).sort_values(by=['İlçe', 'Birim Adı']).reset_index(drop=True)
+                        eslesmeyen_ozet.index += 1
+
+                        st.warning(
+                            f"⚠️ `ASM_AHB_Eslestirme.xlsx` listesinde eşleşmeyen **{len(eslesmeyen_ozet)}** adet yeni/farklı AHB birimi tespit edildi. "
+                            "Bu birimler raporlarda **'Bilinmeyen/Eksik ASM'** başlığı altında toplanmıştır."
+                        )
+                        st.markdown("Eşleştirme tablonuzu (`ASM_AHB_Eslestirme.xlsx`) güncellemek için aşağıdaki listeyi inceleyebilir veya Excel olarak indirebilirsiniz:")
+                        st.dataframe(eslesmeyen_ozet, use_container_width=True)
+                        st.download_button(
+                            label="📥 Eşleşmeyen AHB Birimlerini İndir (Excel)",
+                            data=get_excel(eslesmeyen_ozet),
+                            file_name="Eslesmeyen_Yeni_AHB_Birimleri.xlsx",
+                            key="eslesmeyen_ahb_excel_btn"
+                        )
 
         else:
             st.warning("Lütfen sol menüden analiz edilecek en az bir ay (dosya) seçin.")
