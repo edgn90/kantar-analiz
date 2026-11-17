@@ -8,7 +8,7 @@ import urllib.request
 import ssl
 import re
 import plotly.express as px
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from xhtml2pdf import pisa
 from xhtml2pdf.default import DEFAULT_FONT
 from reportlab.pdfbase import pdfmetrics
@@ -27,6 +27,38 @@ except Exception:
 
 # Sayfa Ayarları
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
+
+
+def style_gradient_safe(styler, subset_col, cmap_type="Blues"):
+    """
+    matplotlib kurulu olmasa dahi DataFrame hücrelerine mavi veya kırmızı
+    renk gradyanı uygulayan saf Python yardımcı fonksiyonu.
+    """
+    if subset_col not in styler.data.columns or styler.data.empty:
+        return styler
+
+    s = pd.to_numeric(styler.data[subset_col], errors="coerce")
+    if s.dropna().empty:
+        return styler
+
+    vmin, vmax = float(s.min()), float(s.max())
+
+    def _color_val(val):
+        if pd.isna(val):
+            return ""
+        ratio = 0.5 if vmax == vmin else max(0.0, min(1.0, (float(val) - vmin) / (vmax - vmin)))
+        if cmap_type == "Reds":
+            r = int(255 - ratio * (255 - 203))
+            g = int(245 - ratio * (245 - 24))
+            b = int(240 - ratio * (240 - 29))
+        else:
+            r = int(247 - ratio * (247 - 33))
+            g = int(251 - ratio * (251 - 113))
+            b = int(255 - ratio * (255 - 181))
+        text_color = "#ffffff" if ratio > 0.65 else "#111111"
+        return f"background-color: rgb({r}, {g}, {b}); color: {text_color};"
+
+    return styler.apply(lambda col: [_color_val(v) for v in col], subset=[subset_col])
 
 
 def _is_valid_ttf(path):
@@ -63,7 +95,8 @@ def get_turkish_font_paths():
     ]
 
     try:
-        mpl_ttf_dir = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
+        import matplotlib as _mpl
+        mpl_ttf_dir = os.path.join(os.path.dirname(_mpl.__file__), "mpl-data", "fonts", "ttf")
         candidate_pairs.insert(0, (
             os.path.join(mpl_ttf_dir, "DejaVuSans.ttf"),
             os.path.join(mpl_ttf_dir, "DejaVuSans-Bold.ttf"),
@@ -349,12 +382,83 @@ def build_ilce_asm_ranking_df(ilce_detay, tarama_turu):
     return asm_df
 
 
+def _create_ilce_asm_chart_pillow_base64(asm_df, secilen_ilce, tarama_turu):
+    """
+    matplotlib bulunmadığında Pillow ile Türkçe karakter destekli yatay sıralama grafiği çizer.
+    """
+    reg_path, bold_path = get_turkish_font_paths()
+    width = 1100
+    row_h = 34
+    top_pad = 55
+    bottom_pad = 58
+    left_pad = 350
+    right_pad = 110
+    height = max(240, top_pad + bottom_pad + len(asm_df) * row_h)
+
+    img = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    try:
+        title_font = ImageFont.truetype(bold_path, 17) if bold_path else ImageFont.load_default()
+        label_font = ImageFont.truetype(reg_path, 13) if reg_path else ImageFont.load_default()
+        bold_font = ImageFont.truetype(bold_path, 13) if bold_path else ImageFont.load_default()
+        small_font = ImageFont.truetype(reg_path, 11) if reg_path else ImageFont.load_default()
+    except Exception:
+        title_font = label_font = bold_font = small_font = ImageFont.load_default()
+
+    title = f"{secilen_ilce} İlçesi - {tarama_turu} Taraması ASM İlçe İçi Sıralaması ve Oranları"
+    draw.text((width // 2, 22), title, fill=(44, 62, 80), font=title_font, anchor="mm")
+
+    max_val = max(100.0, float(asm_df['Oran (%)'].max()) + 12.0)
+    plot_x0 = left_pad
+    plot_x1 = width - right_pad
+    plot_w = plot_x1 - plot_x0
+    plot_y0 = top_pad
+    plot_y1 = height - bottom_pad
+
+    for tick in [0, 25, 50, 70, 100]:
+        if tick <= max_val:
+            gx = plot_x0 + int((tick / max_val) * plot_w)
+            draw.line([(gx, plot_y0), (gx, plot_y1)], fill=(230, 230, 230), width=1)
+            draw.text((gx, plot_y1 + 14), f"%{tick}", fill=(100, 100, 100), font=small_font, anchor="mm")
+
+    for idx, row in asm_df.iterrows():
+        y_center = plot_y0 + idx * row_h + row_h // 2
+        bar_h = 20
+        val = float(row['Oran (%)'])
+        label = str(row['Sıralı ASM Etiketi'])
+        if len(label) > 40:
+            label = label[:37] + "..."
+        draw.text((plot_x0 - 10, y_center), label, fill=(44, 62, 80), font=label_font, anchor="rm")
+
+        bar_w = int((val / max_val) * plot_w)
+        if val >= 70:
+            color = (41, 128, 185)   # Mavi (#2980b9)
+        elif val >= 50:
+            color = (243, 156, 18)   # Turuncu (#f39c12)
+        else:
+            color = (192, 57, 43)    # Kırmızı (#c0392b)
+
+        draw.rectangle([plot_x0, y_center - bar_h // 2, plot_x0 + bar_w, y_center + bar_h // 2], fill=color)
+        draw.text((plot_x0 + bar_w + 8, y_center), f"%{val:.2f}", fill=(44, 62, 80), font=bold_font, anchor="lm")
+
+    x70 = plot_x0 + int((70.0 / max_val) * plot_w)
+    for y in range(plot_y0, plot_y1, 10):
+        draw.line([(x70, y), (x70, min(y + 6, plot_y1))], fill=(214, 48, 49), width=2)
+    draw.text((x70, plot_y1 + 34), "Bakanlık %70 Alt Sınır Hedefi", fill=(214, 48, 49), font=small_font, anchor="mm")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 def create_ilce_asm_chart_base64(ilce_detay, secilen_ilce, tarama_turu):
-    if not HAS_MATPLOTLIB:
-        return None
     asm_df = build_ilce_asm_ranking_df(ilce_detay, tarama_turu)
     if asm_df.empty:
         return None
+
+    if not HAS_MATPLOTLIB:
+        return _create_ilce_asm_chart_pillow_base64(asm_df, secilen_ilce, tarama_turu)
 
     plot_df = asm_df.iloc[::-1]
     fig_height = min(10.5, max(2.4, len(plot_df) * 0.34))
@@ -692,11 +796,9 @@ if yuklenen_dosyalar:
                 ilce_grup_pdf = ilce_grup_sirali.copy()
                 ilce_grup_pdf['Genel Oran (%)'] = ilce_grup_pdf['Genel Oran (%)'].apply(lambda x: f"%{x:.2f}")
                 
-                st.dataframe(
-                    ilce_grup_sirali.style.format({'Genel Oran (%)': "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"})
-                    .background_gradient(subset=['Genel Oran (%)'], cmap='Blues'),
-                    use_container_width=True
-                )
+                styler_ilce = ilce_grup_sirali.style.format({'Genel Oran (%)': "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"})
+                styler_ilce = style_gradient_safe(styler_ilce, 'Genel Oran (%)', cmap_type='Blues')
+                st.dataframe(styler_ilce, use_container_width=True)
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -740,11 +842,9 @@ if yuklenen_dosyalar:
                 asm_grup_pdf = asm_grup_sirali.copy()
                 asm_grup_pdf[hedef_kolon] = asm_grup_pdf[hedef_kolon].apply(lambda x: f"%{x:.2f}")
                 
-                st.dataframe(
-                    asm_grup_sirali.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"})
-                    .background_gradient(subset=[hedef_kolon], cmap='Blues'),
-                    use_container_width=True
-                )
+                styler_asm = asm_grup_sirali.style.format({hedef_kolon: "{:.2f}%", gereken_kolon: "{:.0f}", yapilan_kolon: "{:.0f}"})
+                styler_asm = style_gradient_safe(styler_asm, hedef_kolon, cmap_type='Blues')
+                st.dataframe(styler_asm, use_container_width=True)
                 
                 col3, col4 = st.columns(2)
                 with col3:
@@ -812,7 +912,7 @@ if yuklenen_dosyalar:
                         "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
                     )
 
-                    zip_cache_key = f"toplu_zip_v5_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
+                    zip_cache_key = f"toplu_zip_v6_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
 
                     if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
                         if not mevcut_ilceler:
@@ -1038,13 +1138,12 @@ if yuklenen_dosyalar:
                         f"en az 1 ayda sıfır tarama yaptığı tespit edildi."
                     )
 
-                    st.dataframe(
-                        df_birim_ozet.style.format({
-                            'Sıfır Olduğu Ay Sayısı': "{:.0f}",
-                            'Toplam Gereken Hedef': "{:.0f}"
-                        }).background_gradient(subset=['Sıfır Olduğu Ay Sayısı'], cmap='Reds'),
-                        use_container_width=True
-                    )
+                    styler_acil = df_birim_ozet.style.format({
+                        'Sıfır Olduğu Ay Sayısı': "{:.0f}",
+                        'Toplam Gereken Hedef': "{:.0f}"
+                    })
+                    styler_acil = style_gradient_safe(styler_acil, 'Sıfır Olduğu Ay Sayısı', cmap_type='Reds')
+                    st.dataframe(styler_acil, use_container_width=True)
 
                     col_ex, col_pdf = st.columns(2)
                     with col_ex:
