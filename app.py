@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import glob
 import base64
 import zipfile
 import urllib.request
@@ -40,6 +41,22 @@ def normalize_tr_text(text):
         'Ç': 'c', 'ç': 'c',
     })
     return s.translate(tr_map).lower()
+
+
+def _tr_title_district(val):
+    if pd.isna(val):
+        return None
+    s = str(val).strip()
+    if not s or s.lower() == 'nan':
+        return None
+    tr_lower_map = str.maketrans({'İ': 'i', 'I': 'ı', 'Ş': 'ş', 'Ğ': 'ğ', 'Ü': 'ü', 'Ö': 'ö', 'Ç': 'ç'})
+    s_low = s.translate(tr_lower_map).lower()
+    if not s_low:
+        return None
+    first = s_low[0]
+    first_up_map = {'i': 'İ', 'ı': 'I', 'ş': 'Ş', 'ğ': 'Ğ', 'ü': 'Ü', 'ö': 'Ö', 'ç': 'Ç'}
+    first_up = first_up_map.get(first, first.upper())
+    return first_up + s_low[1:]
 
 
 def _parse_month_components(filename):
@@ -296,19 +313,98 @@ def get_kantar_logo_base64(uploaded_logo=None):
     return None
 
 
-@st.cache_data
-def load_asm_mapping():
+def _mapping_file_priority(path):
+    """
+    GitHub deposunda birden fazla ASM_AHB_Eslestirme*.xlsx dosyası varsa
+    dosya adındaki yıl ve ay bilgisini (ör. KASIM_2026) önceliklendirerek en güncelini seçer.
+    """
+    base = os.path.basename(path)
+    norm = normalize_tr_text(re.sub(r'\.(xlsx|xls)$', '', base, flags=re.IGNORECASE))
+    year_match = re.search(r'(20\d{2})', norm)
+    year = int(year_match.group(1)) if year_match else 0
+
+    ay_sozlugu = [
+        ('ocak', 1), ('subat', 2), ('mart', 3), ('nisan', 4),
+        ('mayis', 5), ('haziran', 6), ('temmuz', 7), ('agustos', 8),
+        ('eylul', 9), ('ekim', 10), ('kasim', 11), ('aralik', 12),
+    ]
+    month_num = 0
+    for ay_adi, ay_no in ay_sozlugu:
+        if re.search(rf'(?:^|[^a-z]){ay_adi}(?:[^a-z]|$)', norm):
+            month_num = ay_no
+            break
+
     try:
-        df_map = pd.concat(pd.read_excel("ASM_AHB_Eslestirme.xlsx", sheet_name=None).values(), ignore_index=True)
-        mapping = dict(zip(df_map['AHB BİRİMİ'].astype(str).str.strip().str.lower(), df_map['ASM'].astype(str).str.strip()))
-        return mapping
+        mtime = os.path.getmtime(path)
     except Exception:
-        return None
+        mtime = 0.0
+
+    return (year, month_num, mtime, base)
+
+
+def _parse_mapping_excel_source(source):
+    """
+    Eşleştirme Excel'indeki tüm sayfaları okur; ASM sütunu boş olan ('Eşleşmeyenler' vb.)
+    satırları ayıklayarak yalnızca geçerli ASM ve İlçe eşleştirme sözlüklerini döndürür.
+    """
+    sheets = pd.read_excel(source, sheet_name=None)
+    df_map = pd.concat(sheets.values(), ignore_index=True)
+    df_map.columns = [str(c).strip() for c in df_map.columns]
+
+    ahb_col = next((c for c in df_map.columns if 'ahb' in normalize_tr_text(c)), 'AHB BİRİMİ')
+    asm_col = next((c for c in df_map.columns if normalize_tr_text(c) == 'asm'), 'ASM')
+    ilce_col = next((c for c in df_map.columns if 'ilce' in normalize_tr_text(c)), None)
+
+    valid_asm = df_map[df_map[ahb_col].notna() & df_map[asm_col].notna()].copy()
+    valid_asm[ahb_col] = valid_asm[ahb_col].astype(str).str.strip()
+    valid_asm[asm_col] = valid_asm[asm_col].astype(str).str.strip()
+    valid_asm = valid_asm[
+        (valid_asm[ahb_col] != '') &
+        (valid_asm[asm_col] != '') &
+        (valid_asm[asm_col].str.lower() != 'nan')
+    ]
+
+    asm_dict = dict(zip(valid_asm[ahb_col].apply(normalize_tr_text), valid_asm[asm_col]))
+
+    ilce_dict = {}
+    if ilce_col and ilce_col in df_map.columns:
+        valid_ilce = df_map[df_map[ahb_col].notna() & df_map[ilce_col].notna()].copy()
+        for _, r in valid_ilce.iterrows():
+            d_clean = _tr_title_district(r[ilce_col])
+            if d_clean:
+                ilce_dict[normalize_tr_text(str(r[ahb_col]).strip())] = d_clean
+
+    return asm_dict, ilce_dict
 
 
 @st.cache_data
-def load_data(files, asm_mapping):
+def load_asm_mapping_from_disk(candidate_signature):
+    try:
+        if not candidate_signature:
+            return None, {}, None
+        target_path = candidate_signature[0][0]
+        asm_dict, ilce_dict = _parse_mapping_excel_source(target_path)
+        return asm_dict, ilce_dict, os.path.basename(target_path)
+    except Exception:
+        return None, {}, None
+
+
+def get_active_asm_mapping():
+    """
+    Proje (GitHub) klasöründeki ASM_AHB_Eslestirme*.xlsx dosyalarından
+    en güncel olanını otomatik seçip yükler.
+    """
+    candidates = glob.glob("ASM_AHB_Eslestirme*.xlsx") + glob.glob("ASM_AHB_Eslestirme*.xls")
+    candidates = [p for p in candidates if os.path.isfile(p) and not os.path.basename(p).startswith("~$")]
+    candidates.sort(key=_mapping_file_priority, reverse=True)
+    signature = tuple((p, os.path.getmtime(p)) for p in candidates)
+    return load_asm_mapping_from_disk(signature)
+
+
+@st.cache_data
+def load_data(files, asm_mapping, ilce_mapping=None):
     tum_veriler = []
+    ilce_mapping = ilce_mapping or {}
     
     for file in files:
         dosya_adi = file.name
@@ -386,9 +482,10 @@ def load_data(files, asm_mapping):
         tum_veriler.append(df_old_final)
 
     combined_df = pd.concat(tum_veriler, ignore_index=True)
+    norm_birim_keys = combined_df['Birim Adı'].astype(str).str.strip().apply(normalize_tr_text)
     
     if asm_mapping:
-        combined_df['ASM Adı'] = combined_df['Birim Adı'].astype(str).str.strip().str.lower().map(asm_mapping).fillna("Bilinmeyen/Eksik ASM")
+        combined_df['ASM Adı'] = norm_birim_keys.map(asm_mapping).fillna("Bilinmeyen/Eksik ASM")
     else:
         combined_df['ASM Adı'] = "Sistemde ASM_AHB_Eslestirme.xlsx bulunamadı"
 
@@ -403,6 +500,9 @@ def load_data(files, asm_mapping):
     ]
     
     def get_district(birim_adi):
+        norm_key = normalize_tr_text(str(birim_adi).strip())
+        if norm_key in ilce_mapping:
+            return ilce_mapping[norm_key]
         birim_adi_upper = str(birim_adi).upper().replace('İ', 'I')
         for d in districts:
             if d.upper().replace('İ', 'I') in birim_adi_upper:
@@ -760,7 +860,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
 
 st.title("📊 KAN-TAR Analiz Sistemi")
 
-asm_mapping = load_asm_mapping()
+asm_mapping, ilce_mapping, aktif_eslestirme_adi = get_active_asm_mapping()
 
 st.sidebar.header("1. Veri Yükleme")
 yuklenen_dosyalar = st.sidebar.file_uploader("KAN-TAR Excel Dosyalarını Yükleyin", type=["xlsx", "xls"], accept_multiple_files=True)
@@ -769,7 +869,7 @@ kantar_logo_b64 = get_kantar_logo_base64(yuklenen_logo)
 
 if yuklenen_dosyalar:
     try:
-        df_ham = load_data(yuklenen_dosyalar, asm_mapping)
+        df_ham = load_data(yuklenen_dosyalar, asm_mapping, ilce_mapping)
         
         st.sidebar.header("2. Filtreleme Seçenekleri")
         
@@ -1257,11 +1357,12 @@ if yuklenen_dosyalar:
             with tab7:
                 st.subheader("🔍 Eşleşmeyen / Yeni AHB Birimleri Kontrolü")
                 if asm_mapping is None:
-                    st.warning("⚠️ Sistemde `ASM_AHB_Eslestirme.xlsx` dosyası bulunamadığı için ASM eşleştirme kontrolü yapılamadı.")
+                    st.warning("⚠️ Sistemde geçerli bir `ASM_AHB_Eslestirme*.xlsx` dosyası bulunamadığı için ASM eşleştirme kontrolü yapılamadı.")
                 else:
+                    st.caption(f"Aktif eşleştirme kaynağı: **{aktif_eslestirme_adi}** ({len(asm_mapping):,} kayıtlı AHB birimi)")
                     eslesmeyen_ham = df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"].copy()
                     if eslesmeyen_ham.empty:
-                        st.success("🎉 Tebrikler! Yüklenen dosyalardaki tüm AHB birimleri `ASM_AHB_Eslestirme.xlsx` listesiyle eksiksiz eşleşti.")
+                        st.success(f"🎉 Tebrikler! Yüklenen dosyalardaki tüm AHB birimleri `{aktif_eslestirme_adi}` listesiyle eksiksiz eşleşti.")
                     else:
                         eslesmeyen_ozet = eslesmeyen_ham.groupby(['İlçe', 'Birim Adı', 'Birim ID'], as_index=False).agg(
                             **{
@@ -1271,10 +1372,10 @@ if yuklenen_dosyalar:
                         eslesmeyen_ozet.index += 1
 
                         st.warning(
-                            f"⚠️ `ASM_AHB_Eslestirme.xlsx` listesinde eşleşmeyen **{len(eslesmeyen_ozet)}** adet yeni/farklı AHB birimi tespit edildi. "
+                            f"⚠️ `{aktif_eslestirme_adi}` listesinde ASM karşılığı bulunmayan **{len(eslesmeyen_ozet)}** adet AHB birimi tespit edildi. "
                             "Bu birimler raporlarda **'Bilinmeyen/Eksik ASM'** başlığı altında toplanmıştır."
                         )
-                        st.markdown("Eşleştirme tablonuzu (`ASM_AHB_Eslestirme.xlsx`) güncellemek için aşağıdaki listeyi inceleyebilir veya Excel olarak indirebilirsiniz:")
+                        st.markdown("Eşleştirme tablonuzu güncellemek için aşağıdaki listeyi inceleyebilir veya Excel olarak indirebilirsiniz:")
                         st.dataframe(eslesmeyen_ozet, use_container_width=True)
                         st.download_button(
                             label="📥 Eşleşmeyen AHB Birimlerini İndir (Excel)",
