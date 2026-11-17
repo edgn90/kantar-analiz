@@ -29,6 +29,88 @@ except Exception:
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 
+def normalize_tr_text(text):
+    s = str(text)
+    tr_map = str.maketrans({
+        'İ': 'i', 'I': 'i', 'ı': 'i',
+        'Ş': 's', 'ş': 's',
+        'Ğ': 'g', 'ğ': 'g',
+        'Ü': 'u', 'ü': 'u',
+        'Ö': 'o', 'ö': 'o',
+        'Ç': 'c', 'ç': 'c',
+    })
+    return s.translate(tr_map).lower()
+
+
+def _parse_month_components(filename):
+    """
+    Dosya adından yıl ve ay bilgisini (Türkçe ay isimleri, ASCII karşılıkları veya
+    baştaki/yıl sonrasındaki ay numaraları üzerinden) ayrıştırır.
+    """
+    raw_name = str(filename).strip()
+    clean_name = re.sub(r'\.(xlsx|xls)$', '', raw_name, flags=re.IGNORECASE)
+    norm = normalize_tr_text(clean_name)
+
+    year_match = re.search(r'(20\d{2})', norm)
+    year = int(year_match.group(1)) if year_match else 0
+
+    ay_sozlugu = [
+        ('ocak', 1), ('subat', 2), ('mart', 3), ('nisan', 4),
+        ('mayis', 5), ('haziran', 6), ('temmuz', 7), ('agustos', 8),
+        ('eylul', 9), ('ekim', 10), ('kasim', 11), ('aralik', 12),
+    ]
+
+    month_num = None
+    for ay_adi, ay_no in ay_sozlugu:
+        if re.search(rf'(?:^|[^a-z]){ay_adi}(?:[^a-z]|$)', norm):
+            month_num = ay_no
+            break
+
+    if month_num is None:
+        lead_match = re.match(r'^0?(\d{1,2})(?:[^\d]|$)', norm)
+        if lead_match:
+            val = int(lead_match.group(1))
+            if 1 <= val <= 12:
+                month_num = val
+        if month_num is None and year > 0:
+            ym_match = re.search(r'20\d{2}[_\-\.\s]+0?(\d{1,2})(?:[^\d]|$)', norm)
+            if ym_match:
+                val = int(ym_match.group(1))
+                if 1 <= val <= 12:
+                    month_num = val
+
+    if month_num is None:
+        fallback_num = re.search(r'^(\d+)', norm)
+        month_num = int(fallback_num.group(1)) if fallback_num else 99
+
+    return year, month_num, raw_name
+
+
+def build_month_order_map(labels):
+    """
+    Verilen dosya/ay etiketlerini Türkçe ay sırasına (ve birden fazla yıl varsa yıl sırasına)
+    göre sıralayıp her etikete kronolojik sıra indeksi atar.
+    """
+    unique_labels = list(dict.fromkeys(labels))
+    parsed = {lbl: _parse_month_components(lbl) for lbl in unique_labels}
+    known_years = {y for (y, _, _) in parsed.values() if y > 0}
+
+    if len(known_years) <= 1:
+        ordered = sorted(unique_labels, key=lambda l: (parsed[l][1], parsed[l][2]))
+    else:
+        default_year = max(known_years)
+        ordered = sorted(
+            unique_labels,
+            key=lambda l: (parsed[l][0] if parsed[l][0] > 0 else default_year, parsed[l][1], parsed[l][2])
+        )
+    return {lbl: idx for idx, lbl in enumerate(ordered)}
+
+
+def sort_month_labels(labels):
+    order_map = build_month_order_map(labels)
+    return sorted(labels, key=lambda l: order_map.get(l, 999))
+
+
 def style_gradient_safe(styler, subset_col, cmap_type="Blues"):
     """
     matplotlib kurulu olmasa dahi DataFrame hücrelerine mavi veya kırmızı
@@ -501,11 +583,7 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
     fonts_loaded, font_face_css = setup_fonts()
     font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
     
-    def get_month_num(m):
-        match = re.search(r'^(\d+)', str(m))
-        return int(match.group(1)) if match else 99
-    
-    sirali_aylar = sorted(secilen_aylar, key=get_month_num)
+    sirali_aylar = sort_month_labels(secilen_aylar)
     aylar_str = ", ".join(sirali_aylar)
     
     ilce_grup = df.groupby('İlçe')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
@@ -696,7 +774,7 @@ if yuklenen_dosyalar:
         st.sidebar.header("2. Filtreleme Seçenekleri")
         
         with st.sidebar.form(key="filtre_form"):
-            ay_secenekleri = df_ham['Dosya (Ay)'].unique().tolist()
+            ay_secenekleri = sort_month_labels(df_ham['Dosya (Ay)'].unique().tolist())
             secilen_aylar = st.multiselect("Analiz Edilecek Ayları Seçin", options=ay_secenekleri, default=ay_secenekleri)
             
             st.markdown("---")
@@ -713,6 +791,31 @@ if yuklenen_dosyalar:
             )
             
             calistir_butonu = st.form_submit_button(label="Çalıştır 🚀")
+
+        # --- EŞLEŞMEYEN / YENİ AHB BİRİMLERİ UYARISI ---
+        if asm_mapping is not None:
+            eslesmeyen_ham = df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"].copy()
+            if not eslesmeyen_ham.empty:
+                eslesmeyen_ozet = eslesmeyen_ham.groupby(['İlçe', 'Birim Adı', 'Birim ID'], as_index=False).agg(
+                    **{
+                        'Görüldüğü Aylar': ('Dosya (Ay)', lambda x: ', '.join(sort_month_labels(list(dict.fromkeys(x)))))
+                    }
+                ).sort_values(by=['İlçe', 'Birim Adı']).reset_index(drop=True)
+                eslesmeyen_ozet.index += 1
+
+                st.warning(
+                    f"⚠️ `ASM_AHB_Eslestirme.xlsx` listesinde eşleşmeyen **{len(eslesmeyen_ozet)}** adet yeni/farklı AHB birimi tespit edildi. "
+                    "Bu birimler raporlarda **'Bilinmeyen/Eksik ASM'** başlığı altında toplanmıştır."
+                )
+                with st.expander(f"🔍 Eşleşmeyen / Yeni AHB Birimlerini Görüntüle ve İndir ({len(eslesmeyen_ozet)} Birim)"):
+                    st.markdown("Eşleştirme tablonuzu (`ASM_AHB_Eslestirme.xlsx`) güncellemek için aşağıdaki listeyi inceleyebilir veya Excel olarak indirebilirsiniz:")
+                    st.dataframe(eslesmeyen_ozet, use_container_width=True)
+                    st.download_button(
+                        label="📥 Eşleşmeyen AHB Birimlerini İndir (Excel)",
+                        data=get_excel(eslesmeyen_ozet),
+                        file_name="Eslesmeyen_Yeni_AHB_Birimleri.xlsx",
+                        key="eslesmeyen_ahb_excel_btn"
+                    )
 
         if secilen_aylar:
             df_filtrelenmis_ay = df_ham[df_ham['Dosya (Ay)'].isin(secilen_aylar)]
@@ -891,11 +994,7 @@ if yuklenen_dosyalar:
                 tablo_goster("Kolorektal")
                 
             with tab4:
-                def get_month_num(m):
-                    match = re.search(r'^(\d+)', str(m))
-                    return int(match.group(1)) if match else 99
-
-                sirali_ay_isimleri = sorted(secilen_aylar, key=get_month_num)
+                sirali_ay_isimleri = sort_month_labels(secilen_aylar)
                 logo_hash = len(kantar_logo_b64) if kantar_logo_b64 else 0
 
                 if secilen_ilce == "Tüm İlçeler":
@@ -912,7 +1011,7 @@ if yuklenen_dosyalar:
                         "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
                     )
 
-                    zip_cache_key = f"toplu_zip_v6_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
+                    zip_cache_key = f"toplu_zip_v7_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
 
                     if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
                         if not mevcut_ilceler:
@@ -1008,10 +1107,6 @@ if yuklenen_dosyalar:
                 if len(secilen_aylar) < 2:
                     st.info("Trend analizi yapabilmek için sol menüden en az 2 farklı ay (dosya) seçmelisiniz.")
                 else:
-                    def get_month_order(filename):
-                        match = re.search(r'^(\d+)', str(filename))
-                        return int(match.group(1)) if match else 99
-                    
                     if secilen_ilce == "Tüm İlçeler":
                         st.markdown("**Tüm İstanbul Geneli Aylık Trend**")
                         trend_df_raw = df_filtrelenmis_ay.copy()
@@ -1030,7 +1125,8 @@ if yuklenen_dosyalar:
                     
                     trend_grup = trend_df_raw.groupby('Dosya (Ay)')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
                     
-                    trend_grup['Ay_Sira'] = trend_grup['Dosya (Ay)'].apply(get_month_order)
+                    month_order_map_trend = build_month_order_map(trend_grup['Dosya (Ay)'].tolist())
+                    trend_grup['Ay_Sira'] = trend_grup['Dosya (Ay)'].map(month_order_map_trend)
                     trend_grup = trend_grup.sort_values('Ay_Sira').drop('Ay_Sira', axis=1).reset_index(drop=True)
                     
                     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
@@ -1098,10 +1194,6 @@ if yuklenen_dosyalar:
                 else:
                     acil_df_base = df_filtrelenmis_ay.copy()
 
-                def get_month_order_acil(filename):
-                    match = re.search(r'^(\d+)', str(filename))
-                    return int(match.group(1)) if match else 99
-
                 def clean_month_name_acil(filename):
                     return str(filename).replace('.xlsx', '').replace('.xls', '').replace('Birim Bazında', '').strip()
 
@@ -1115,7 +1207,8 @@ if yuklenen_dosyalar:
                         st.success(f"🎉 Tebrikler! Seçilen kriterlerde **{tarama_turu}** taraması sıfır olan birim bulunmuyor.")
                         return
 
-                    df_zero['Ay_Sira'] = df_zero['Dosya (Ay)'].apply(get_month_order_acil)
+                    month_order_map_acil = build_month_order_map(df_zero['Dosya (Ay)'].tolist())
+                    df_zero['Ay_Sira'] = df_zero['Dosya (Ay)'].map(month_order_map_acil)
                     df_zero['Ay_Temiz'] = df_zero['Dosya (Ay)'].apply(clean_month_name_acil)
                     df_zero = df_zero.sort_values(['Ay_Sira', 'Dosya (Ay)'])
 
