@@ -30,6 +30,19 @@ except Exception:
 st.set_page_config(page_title="KAN-TAR Analiz Sistemi", layout="wide")
 
 
+def safe_int(val, default=0):
+    """
+    NaN, inf veya None değerlerde 'cannot convert float NaN to integer'
+    hatasını önleyerek güvenli tam sayı dönüşümü yapar.
+    """
+    try:
+        if pd.isna(val) or val in (float("inf"), float("-inf")):
+            return default
+        return int(round(float(val)))
+    except Exception:
+        return default
+
+
 def normalize_tr_text(text):
     s = str(text)
     tr_map = str.maketrans({
@@ -136,14 +149,14 @@ def style_gradient_safe(styler, subset_col, cmap_type="Blues"):
     if subset_col not in styler.data.columns or styler.data.empty:
         return styler
 
-    s = pd.to_numeric(styler.data[subset_col], errors="coerce")
+    s = pd.to_numeric(styler.data[subset_col], errors="coerce").replace([float("inf"), float("-inf")], float("nan"))
     if s.dropna().empty:
         return styler
 
     vmin, vmax = float(s.min()), float(s.max())
 
     def _color_val(val):
-        if pd.isna(val):
+        if pd.isna(val) or val in (float("inf"), float("-inf")):
             return ""
         ratio = 0.5 if vmax == vmin else max(0.0, min(1.0, (float(val) - vmin) / (vmax - vmin)))
         if cmap_type == "Reds":
@@ -427,14 +440,18 @@ def load_data(files, asm_mapping, ilce_mapping=None):
                 
                 temp_df = pd.DataFrame()
                 temp_df['Birim Adı'] = df_pivot['birim adi']
-                temp_df['Birim ID'] = temp_df['Birim Adı'].str.extract(r'(\d+)\s+Nolu').fillna("Bilinmiyor")
+                temp_df['Birim ID'] = temp_df['Birim Adı'].astype(str).str.extract(r'(\d+)\s+Nolu').fillna("Bilinmiyor")
                 temp_df['Dosya (Ay)'] = dosya_adi
                 
                 def get_col(df, keyword, val_type):
                     for c in df.columns:
                         if val_type in c.lower() and keyword.lower() in c.lower():
-                            return pd.to_numeric(df[c], errors='coerce').fillna(0)
-                    return pd.Series([0]*len(df))
+                            return (
+                                pd.to_numeric(df[c], errors='coerce')
+                                .replace([float('inf'), float('-inf')], 0)
+                                .fillna(0)
+                            )
+                    return pd.Series([0.0]*len(df))
                 
                 temp_df['Mamografi Gereken'] = get_col(df_pivot, 'mamograf', 'gereken')
                 temp_df['Mamografi Yapılan'] = get_col(df_pivot, 'mamograf', 'yapilan')
@@ -470,19 +487,56 @@ def load_data(files, asm_mapping, ilce_mapping=None):
             'Gereken Tarama.1': 'Serviks Gereken', 'Oran(%).1': 'Serviks Oranı',
             'Gereken Tarama.2': 'Kolorektal Gereken', 'Oran(%).2': 'Kolorektal Oranı'
         })
+
+        gerekli_kolonlar = ['Birim Adı', 'Mamografi Gereken', 'Mamografi Oranı', 'Serviks Gereken', 'Serviks Oranı', 'Kolorektal Gereken', 'Kolorektal Oranı']
+        eksik_kolonlar = [k for k in gerekli_kolonlar if k not in df_old.columns]
+        if eksik_kolonlar:
+            raise ValueError(f"'{dosya_adi}' dosyası geçerli bir KAN-TAR tablosu formatında değil (Eksik sütunlar: {', '.join(eksik_kolonlar)}).")
+
+        if 'Birim ID' not in df_old.columns:
+            df_old['Birim ID'] = df_old['Birim Adı'].astype(str).str.extract(r'(\d+)\s+Nolu').fillna("Bilinmiyor")
         
         for t in ['Mamografi', 'Serviks', 'Kolorektal']:
-            gereken = pd.to_numeric(df_old[f'{t} Gereken'], errors='coerce').fillna(0)
-            oran = pd.to_numeric(df_old[f'{t} Oranı'], errors='coerce').fillna(0)
+            gereken = (
+                pd.to_numeric(df_old[f'{t} Gereken'], errors='coerce')
+                .replace([float('inf'), float('-inf')], 0)
+                .fillna(0)
+            )
+            oran = (
+                pd.to_numeric(df_old[f'{t} Oranı'], errors='coerce')
+                .replace([float('inf'), float('-inf')], 0)
+                .fillna(0)
+            )
             df_old[f'{t} Gereken'] = gereken
-            df_old[f'{t} Yapılan'] = (oran * gereken / 100).round()
+            df_old[f'{t} Yapılan'] = (oran * gereken / 100).round().fillna(0)
             
         df_old_final = df_old[['Birim Adı', 'Birim ID', 'Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].copy()
         df_old_final['Dosya (Ay)'] = dosya_adi
         tum_veriler.append(df_old_final)
 
     combined_df = pd.concat(tum_veriler, ignore_index=True)
-    norm_birim_keys = combined_df['Birim Adı'].astype(str).str.strip().apply(normalize_tr_text)
+
+    combined_df = combined_df[combined_df['Birim Adı'].notna()].copy()
+    combined_df['Birim Adı'] = combined_df['Birim Adı'].astype(str).str.strip()
+    combined_df = combined_df[
+        (combined_df['Birim Adı'] != '') &
+        (combined_df['Birim Adı'].str.lower() != 'nan') &
+        (~combined_df['Birim Adı'].str.lower().isin(['toplam', 'genel toplam']))
+    ].reset_index(drop=True)
+
+    sayisal_sutunlar = [
+        'Mamografi Gereken', 'Mamografi Yapılan',
+        'Serviks Gereken', 'Serviks Yapılan',
+        'Kolorektal Gereken', 'Kolorektal Yapılan'
+    ]
+    for col in sayisal_sutunlar:
+        combined_df[col] = (
+            pd.to_numeric(combined_df[col], errors='coerce')
+            .replace([float('inf'), float('-inf')], 0)
+            .fillna(0)
+        )
+
+    norm_birim_keys = combined_df['Birim Adı'].apply(normalize_tr_text)
     
     if asm_mapping:
         combined_df['ASM Adı'] = norm_birim_keys.map(asm_mapping).fillna("Bilinmeyen/Eksik ASM")
@@ -557,10 +611,14 @@ def build_ilce_asm_ranking_df(ilce_detay, tarama_turu):
     gereken_col = f"{tarama_turu} Gereken"
     yapilan_col = f"{tarama_turu} Yapılan"
     asm_df = ilce_detay.groupby('ASM Adı', as_index=False)[[gereken_col, yapilan_col]].sum()
-    asm_df['Oran (%)'] = (asm_df[yapilan_col] / asm_df[gereken_col] * 100).fillna(0)
+    asm_df['Oran (%)'] = (
+        (asm_df[yapilan_col] / asm_df[gereken_col] * 100)
+        .replace([float('inf'), float('-inf')], 0)
+        .fillna(0)
+    )
     asm_df = asm_df.sort_values(by=['Oran (%)', 'ASM Adı'], ascending=[False, True]).reset_index(drop=True)
     asm_df['İlçe İçi Sıra'] = asm_df.index + 1
-    asm_df['Sıralı ASM Etiketi'] = asm_df.apply(lambda r: f"{int(r['İlçe İçi Sıra'])}. {r['ASM Adı']}", axis=1)
+    asm_df['Sıralı ASM Etiketi'] = asm_df.apply(lambda r: f"{safe_int(r['İlçe İçi Sıra'])}. {r['ASM Adı']}", axis=1)
     return asm_df
 
 
@@ -607,7 +665,7 @@ def _create_ilce_asm_chart_pillow_base64(asm_df, secilen_ilce, tarama_turu):
     for idx, row in asm_df.iterrows():
         y_center = plot_y0 + idx * row_h + row_h // 2
         bar_h = 20
-        val = float(row['Oran (%)'])
+        val = 0.0 if pd.isna(row['Oran (%)']) else float(row['Oran (%)'])
         label = str(row['Sıralı ASM Etiketi'])
         if len(label) > 40:
             label = label[:37] + "..."
@@ -688,14 +746,18 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
     
     ilce_grup = df.groupby('İlçe')[['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']].sum().reset_index()
     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
-        ilce_grup[f'{t} Oranı'] = (ilce_grup[f'{t} Yapılan'] / ilce_grup[f'{t} Gereken'] * 100).fillna(0)
-        ilce_grup[f'{t} Sıra'] = ilce_grup[f'{t} Oranı'].rank(ascending=False, method='min').astype(int)
+        ilce_grup[f'{t} Oranı'] = (
+            (ilce_grup[f'{t} Yapılan'] / ilce_grup[f'{t} Gereken'] * 100)
+            .replace([float('inf'), float('-inf')], 0)
+            .fillna(0)
+        )
+        ilce_grup[f'{t} Sıra'] = ilce_grup[f'{t} Oranı'].rank(ascending=False, method='min').fillna(0).astype(int)
         
     ilce_ozet = ilce_grup[ilce_grup['İlçe'] == secilen_ilce].iloc[0]
     ilce_detay = df[df['İlçe'] == secilen_ilce]
     
     def format_oran(oran):
-        if pd.isna(oran):
+        if pd.isna(oran) or oran in (float("inf"), float("-inf")):
             oran = 0
         if oran < 50.0:
             return f"<span style='color: red; font-weight: bold;'>%{oran:.2f} (Uyarı)</span>"
@@ -757,9 +819,9 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
                 <th>Kolorektal Taraması</th>
             </tr>
             <tr>
-                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Mamografi Sıra']}.</span></td>
-                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Serviks Sıra']}.</span></td>
-                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {ilce_ozet['Kolorektal Sıra']}.</span></td>
+                <td>{format_oran(ilce_ozet['Mamografi Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {safe_int(ilce_ozet['Mamografi Sıra'])}.</span></td>
+                <td>{format_oran(ilce_ozet['Serviks Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {safe_int(ilce_ozet['Serviks Sıra'])}.</span></td>
+                <td>{format_oran(ilce_ozet['Kolorektal Oranı'])} <br><span style='font-size: 9px; color: #555;'>İstanbul Sırası: {safe_int(ilce_ozet['Kolorektal Sıra'])}.</span></td>
             </tr>
         </table>
         
@@ -784,12 +846,12 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
     
     for _, asm_row in asm_grup.iterrows():
         asm_adi = asm_row['ASM Adı']
-        asm_m_ger = int(round(asm_row['Mamografi Gereken']))
-        asm_m_yap = int(round(asm_row['Mamografi Yapılan']))
-        asm_s_ger = int(round(asm_row['Serviks Gereken']))
-        asm_s_yap = int(round(asm_row['Serviks Yapılan']))
-        asm_k_ger = int(round(asm_row['Kolorektal Gereken']))
-        asm_k_yap = int(round(asm_row['Kolorektal Yapılan']))
+        asm_m_ger = safe_int(asm_row['Mamografi Gereken'])
+        asm_m_yap = safe_int(asm_row['Mamografi Yapılan'])
+        asm_s_ger = safe_int(asm_row['Serviks Gereken'])
+        asm_s_yap = safe_int(asm_row['Serviks Yapılan'])
+        asm_k_ger = safe_int(asm_row['Kolorektal Gereken'])
+        asm_k_yap = safe_int(asm_row['Kolorektal Yapılan'])
 
         m_oran = (asm_row['Mamografi Yapılan'] / asm_row['Mamografi Gereken'] * 100) if asm_row['Mamografi Gereken'] > 0 else 0
         s_oran = (asm_row['Serviks Yapılan'] / asm_row['Serviks Gereken'] * 100) if asm_row['Serviks Gereken'] > 0 else 0
@@ -836,12 +898,12 @@ def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
         
         asm_birimler = ilce_detay[ilce_detay['ASM Adı'] == asm_adi].sort_values(by='Birim Adı')
         for _, birim_row in asm_birimler.iterrows():
-            m_ger = int(round(birim_row['Mamografi Gereken']))
-            m_yap = int(round(birim_row['Mamografi Yapılan']))
-            s_ger = int(round(birim_row['Serviks Gereken']))
-            s_yap = int(round(birim_row['Serviks Yapılan']))
-            k_ger = int(round(birim_row['Kolorektal Gereken']))
-            k_yap = int(round(birim_row['Kolorektal Yapılan']))
+            m_ger = safe_int(birim_row['Mamografi Gereken'])
+            m_yap = safe_int(birim_row['Mamografi Yapılan'])
+            s_ger = safe_int(birim_row['Serviks Gereken'])
+            s_yap = safe_int(birim_row['Serviks Yapılan'])
+            k_ger = safe_int(birim_row['Kolorektal Gereken'])
+            k_yap = safe_int(birim_row['Kolorektal Yapılan'])
 
             html_content += "<tr>"
             html_content += f"<td class='left-align'>{str(birim_row['Birim Adı'])}</td>"
@@ -906,10 +968,14 @@ if yuklenen_dosyalar:
             df = df_filtrelenmis_ay.groupby('Birim Adı').agg(agg_funcs).reset_index()
             
             for t in ['Mamografi', 'Serviks', 'Kolorektal']:
-                df[f'{t} Oranı'] = (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100).fillna(0)
+                df[f'{t} Oranı'] = (
+                    (df[f'{t} Yapılan'] / df[f'{t} Gereken'] * 100)
+                    .replace([float('inf'), float('-inf')], 0)
+                    .fillna(0)
+                )
 
             eslesmeyen_sayisi = (
-                int(df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"]['Birim Adı'].nunique())
+                safe_int(df_ham[df_ham['ASM Adı'] == "Bilinmeyen/Eksik ASM"]['Birim Adı'].nunique())
                 if asm_mapping is not None else 0
             )
             tab7_baslik = (
@@ -955,11 +1021,15 @@ if yuklenen_dosyalar:
                 
                 st.subheader(f"📍 İlçe Başarı Sıralaması ({ilce_baslik})")
                 ilce_grup = filtrelenmis_df.groupby('İlçe')[[gereken_kolon, yapilan_kolon]].sum().reset_index()
-                ilce_grup['Genel Oran (%)'] = (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100).fillna(0)
+                ilce_grup['Genel Oran (%)'] = (
+                    (ilce_grup[yapilan_kolon] / ilce_grup[gereken_kolon] * 100)
+                    .replace([float('inf'), float('-inf')], 0)
+                    .fillna(0)
+                )
                 ilce_grup_sirali = ilce_grup.sort_values(by='Genel Oran (%)', ascending=False).reset_index(drop=True)
                 ilce_grup_sirali.index += 1
                 
-                if secilen_ilce == "Tüm İlçeler":
+                if secilen_ilce == "Tüm İlçeler" and not ilce_grup_sirali.empty:
                     max_y_ilce = max(100, float(ilce_grup_sirali['Genel Oran (%)'].max()) * 1.12)
                     fig_ilce = px.bar(
                         ilce_grup_sirali, 
@@ -999,7 +1069,11 @@ if yuklenen_dosyalar:
 
                 st.subheader(f"🏥 ASM (Aile Sağlığı Merkezi) Başarı Sıralaması ({ilce_baslik} | %{min_oran} - %{max_oran} Arası)")
                 asm_grup = filtrelenmis_df.groupby(['İlçe', 'ASM Adı'])[[gereken_kolon, yapilan_kolon]].sum().reset_index()
-                asm_grup[hedef_kolon] = (asm_grup[yapilan_kolon] / asm_grup[gereken_kolon] * 100).fillna(0)
+                asm_grup[hedef_kolon] = (
+                    (asm_grup[yapilan_kolon] / asm_grup[gereken_kolon] * 100)
+                    .replace([float('inf'), float('-inf')], 0)
+                    .fillna(0)
+                )
                 
                 asm_grup_aralikli = asm_grup[(asm_grup[hedef_kolon] >= min_oran) & (asm_grup[hedef_kolon] <= max_oran)]
                 asm_grup_sirali = asm_grup_aralikli.sort_values(by=hedef_kolon, ascending=False).reset_index(drop=True)
@@ -1097,7 +1171,7 @@ if yuklenen_dosyalar:
                         "PDF raporlarını tek bir `.zip` arşiv dosyası olarak oluşturup indirebilirsiniz."
                     )
 
-                    zip_cache_key = f"toplu_zip_v7_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
+                    zip_cache_key = f"toplu_zip_v7_{'_'.join(sirali_ay_isimleri)}_{len(mevcut_ilceler)}_{safe_int(df['Mamografi Yapılan'].sum())}_{logo_hash}"
 
                     if st.button("📦 Tüm İlçelerin Raporlarını Toplu İndir (ZIP)", key="toplu_zip_olustur_btn"):
                         if not mevcut_ilceler:
@@ -1216,7 +1290,11 @@ if yuklenen_dosyalar:
                     trend_grup = trend_grup.sort_values('Ay_Sira').drop('Ay_Sira', axis=1).reset_index(drop=True)
                     
                     for t in ['Mamografi', 'Serviks', 'Kolorektal']:
-                        trend_grup[f'{t} Oranı (%)'] = (trend_grup[f'{t} Yapılan'] / trend_grup[f'{t} Gereken'] * 100).fillna(0)
+                        trend_grup[f'{t} Oranı (%)'] = (
+                            (trend_grup[f'{t} Yapılan'] / trend_grup[f'{t} Gereken'] * 100)
+                            .replace([float('inf'), float('-inf')], 0)
+                            .fillna(0)
+                        )
                     
                     trend_uzun_df = trend_grup.melt(
                         id_vars=['Dosya (Ay)'],
