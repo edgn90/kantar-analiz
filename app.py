@@ -737,6 +737,439 @@ def create_ilce_asm_chart_base64(ilce_detay, secilen_ilce, tarama_turu):
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
+def _create_istanbul_baraj_chart_pillow_base64(tarama_turleri, gecenler, kalanlar, toplam_ilce):
+    reg_path, bold_path = get_turkish_font_paths()
+    width, height = 1000, 420
+    img = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    try:
+        title_font = ImageFont.truetype(bold_path, 18) if bold_path else ImageFont.load_default()
+        label_font = ImageFont.truetype(bold_path, 14) if bold_path else ImageFont.load_default()
+        small_font = ImageFont.truetype(reg_path, 12) if reg_path else ImageFont.load_default()
+    except Exception:
+        title_font = label_font = small_font = ImageFont.load_default()
+
+    draw.text(
+        (width // 2, 26),
+        f"İstanbul Geneli ({toplam_ilce} İlçe) - %70 Hedef Barajını Geçen / Kalan İlçe Sayıları",
+        fill=(44, 62, 80),
+        font=title_font,
+        anchor="mm"
+    )
+
+    plot_x0, plot_x1 = 110, width - 80
+    plot_y0, plot_y1 = 75, height - 75
+    plot_h = plot_y1 - plot_y0
+    max_y = max(toplam_ilce + 5, max(gecenler + kalanlar + [10]))
+
+    for tick in range(0, int(max_y) + 1, 10):
+        gy = plot_y1 - int((tick / max_y) * plot_h)
+        draw.line([(plot_x0, gy), (plot_x1, gy)], fill=(230, 230, 230), width=1)
+        draw.text((plot_x0 - 12, gy), str(tick), fill=(100, 100, 100), font=small_font, anchor="rm")
+
+    group_w = (plot_x1 - plot_x0) // len(tarama_turleri)
+    bar_w = 68
+    for idx, t in enumerate(tarama_turleri):
+        cx = plot_x0 + idx * group_w + group_w // 2
+        g_val = gecenler[idx]
+        k_val = kalanlar[idx]
+
+        gh = int((g_val / max_y) * plot_h)
+        kh = int((k_val / max_y) * plot_h)
+
+        draw.rectangle([cx - bar_w - 6, plot_y1 - gh, cx - 6, plot_y1], fill=(39, 174, 96))
+        g_pct = (g_val / toplam_ilce * 100) if toplam_ilce > 0 else 0
+        draw.text((cx - bar_w // 2 - 6, plot_y1 - gh - 12), f"{g_val} (%{g_pct:.1f})", fill=(30, 132, 73), font=small_font, anchor="mm")
+
+        draw.rectangle([cx + 6, plot_y1 - kh, cx + bar_w + 6, plot_y1], fill=(192, 57, 43))
+        k_pct = (k_val / toplam_ilce * 100) if toplam_ilce > 0 else 0
+        draw.text((cx + bar_w // 2 + 6, plot_y1 - kh - 12), f"{k_val} (%{k_pct:.1f})", fill=(146, 43, 33), font=small_font, anchor="mm")
+
+        draw.text((cx, plot_y1 + 22), t, fill=(44, 62, 80), font=label_font, anchor="mm")
+
+    draw.rectangle([240, height - 32, 258, height - 16], fill=(39, 174, 96))
+    draw.text((266, height - 24), "%70 Barajını Geçen İlçe", fill=(44, 62, 80), font=small_font, anchor="lm")
+    draw.rectangle([520, height - 32, 538, height - 16], fill=(192, 57, 43))
+    draw.text((546, height - 24), "%70 Altında Kalan İlçe", fill=(44, 62, 80), font=small_font, anchor="lm")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def create_istanbul_baraj_chart_base64(ilce_ozet_df):
+    """
+    3 tarama türünde %70 hedef barajını geçen ve altında kalan ilçe sayılarını
+    karşılaştırmalı grafik olarak üretir.
+    """
+    if ilce_ozet_df.empty:
+        return None
+
+    tarama_turleri = ['Mamografi', 'Serviks', 'Kolorektal']
+    gecenler = [safe_int((ilce_ozet_df[f'{t} Oranı'] >= 70.0).sum()) for t in tarama_turleri]
+    kalanlar = [safe_int((ilce_ozet_df[f'{t} Oranı'] < 70.0).sum()) for t in tarama_turleri]
+    toplam_ilce = len(ilce_ozet_df)
+
+    if not HAS_MATPLOTLIB:
+        return _create_istanbul_baraj_chart_pillow_base64(tarama_turleri, gecenler, kalanlar, toplam_ilce)
+
+    fig, ax = plt.subplots(figsize=(7.8, 3.1), dpi=150)
+    x_pos = list(range(len(tarama_turleri)))
+    bar_width = 0.34
+
+    bars_gecen = ax.bar([x - bar_width / 2 for x in x_pos], gecenler, width=bar_width, label='%70 Barajını Geçen İlçe', color='#27ae60')
+    bars_kalan = ax.bar([x + bar_width / 2 for x in x_pos], kalanlar, width=bar_width, label='%70 Altında Kalan İlçe', color='#c0392b')
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(tarama_turleri, fontsize=9.5, fontweight='bold')
+    ax.set_ylabel('İlçe Sayısı', fontsize=8.5)
+    ax.set_ylim(0, max(toplam_ilce + 7, max(gecenler + kalanlar) + 8))
+    ax.set_title(f"İstanbul Geneli ({toplam_ilce} İlçe) - Tarama Türlerine Göre %70 Hedef Barajı Durumu", fontsize=10, fontweight='bold', pad=8)
+    ax.grid(axis='y', linestyle=':', alpha=0.5)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    for bar in bars_gecen:
+        h = safe_int(bar.get_height())
+        pct = (h / toplam_ilce * 100) if toplam_ilce > 0 else 0
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            h + 0.6,
+            f"{h} İlçe (%{pct:.1f})",
+            ha='center',
+            va='bottom',
+            fontsize=8,
+            fontweight='bold',
+            color='#1e8449'
+        )
+
+    for bar in bars_kalan:
+        h = safe_int(bar.get_height())
+        pct = (h / toplam_ilce * 100) if toplam_ilce > 0 else 0
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            h + 0.6,
+            f"{h} İlçe (%{pct:.1f})",
+            ha='center',
+            va='bottom',
+            fontsize=8,
+            fontweight='bold',
+            color='#922b21'
+        )
+
+    ax.legend(loc='upper right', fontsize=8, frameon=True)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
+def create_istanbul_ilce_ranking_chart_base64(ilce_ozet_df, tarama_turu):
+    """
+    Tüm İstanbul ilçelerinin ilgili tarama türündeki il sıralamasını ve oranlarını
+    yatay çubuk grafik olarak üretir.
+    """
+    if ilce_ozet_df.empty:
+        return None
+
+    oran_col = f"{tarama_turu} Oranı"
+    sira_col = f"{tarama_turu} Sıra"
+
+    sub_df = ilce_ozet_df.sort_values(by=[oran_col, 'İlçe'], ascending=[False, True]).reset_index(drop=True)
+    sub_df['Sıralı Etiket'] = sub_df.apply(lambda r: f"{safe_int(r[sira_col])}. {r['İlçe']}", axis=1)
+
+    if not HAS_MATPLOTLIB:
+        pillow_df = pd.DataFrame({
+            'Sıralı ASM Etiketi': sub_df['Sıralı Etiket'],
+            'Oran (%)': sub_df[oran_col]
+        })
+        return _create_ilce_asm_chart_pillow_base64(pillow_df, "İstanbul Geneli", tarama_turu)
+
+    plot_df = sub_df.iloc[::-1]
+    fig_height = min(10.2, max(3.2, len(plot_df) * 0.245))
+    fig, ax = plt.subplots(figsize=(8.2, fig_height), dpi=150)
+
+    bar_colors = ['#2980b9' if val >= 70 else ('#f39c12' if val >= 50 else '#c0392b') for val in plot_df[oran_col]]
+    bars = ax.barh(plot_df['Sıralı Etiket'], plot_df[oran_col], color=bar_colors, height=0.66)
+
+    ax.axvline(70, color='#d63031', linestyle='--', linewidth=1.4, label='Bakanlık %70 Alt Sınır Hedefi')
+    ax.set_xlim(0, max(105, float(plot_df[oran_col].max()) + 14))
+    ax.set_xlabel('Başarı Oranı (%)', fontsize=8.5)
+    ax.set_title(f"İstanbul İl Geneli - {tarama_turu} Taraması İlçe Sıralaması ve Oranları", fontsize=10, fontweight='bold', pad=8)
+    ax.tick_params(axis='both', labelsize=7.6)
+    ax.grid(axis='x', linestyle=':', alpha=0.5)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    for bar, val in zip(bars, plot_df[oran_col]):
+        ax.text(
+            val + 1.1,
+            bar.get_y() + bar.get_height() / 2,
+            f"%{val:.2f}",
+            va='center',
+            ha='left',
+            fontsize=7.5,
+            fontweight='bold',
+            color='#2c3e50'
+        )
+
+    ax.legend(loc='lower right', fontsize=8, frameon=True)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    plt.close(fig)
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
+def get_istanbul_yonetici_ozeti_pdf(df, secilen_aylar, logo_b64=None):
+    """
+    Tüm İstanbul ilçelerinin 3 tarama türündeki oranlarını, il sıralamalarını ve
+    %70 barajını geçen/kalan ilçe sayılarını grafiklerle özetleyen Yönetici Özeti PDF'i üretir.
+    """
+    fonts_loaded, font_face_css = setup_fonts()
+    font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
+
+    sirali_aylar = sort_month_labels(secilen_aylar)
+    aylar_str = ", ".join(sirali_aylar)
+
+    df_ilceler = df[df['İlçe'] != "Diğer/Kurum Tabiplikleri"].copy()
+    if df_ilceler.empty:
+        df_ilceler = df.copy()
+
+    ilce_grup = df_ilceler.groupby('İlçe', as_index=False)[
+        ['Mamografi Gereken', 'Mamografi Yapılan', 'Serviks Gereken', 'Serviks Yapılan', 'Kolorektal Gereken', 'Kolorektal Yapılan']
+    ].sum()
+
+    for t in ['Mamografi', 'Serviks', 'Kolorektal']:
+        ilce_grup[f'{t} Oranı'] = (
+            (ilce_grup[f'{t} Yapılan'] / ilce_grup[f'{t} Gereken'] * 100)
+            .replace([float('inf'), float('-inf')], 0)
+            .fillna(0)
+        )
+        ilce_grup = ilce_grup.sort_values(by=[f'{t} Oranı', 'İlçe'], ascending=[False, True]).reset_index(drop=True)
+        ilce_grup[f'{t} Sıra'] = ilce_grup.index + 1
+
+    ilce_grup['Ortalama Oran'] = (
+        ilce_grup['Mamografi Oranı'] + ilce_grup['Serviks Oranı'] + ilce_grup['Kolorektal Oranı']
+    ) / 3.0
+    ilce_grup['Gecilen Baraj Sayisi'] = (
+        (ilce_grup['Mamografi Oranı'] >= 70.0).astype(int) +
+        (ilce_grup['Serviks Oranı'] >= 70.0).astype(int) +
+        (ilce_grup['Kolorektal Oranı'] >= 70.0).astype(int)
+    )
+    ilce_grup = ilce_grup.sort_values(by=['Ortalama Oran', 'İlçe'], ascending=[False, True]).reset_index(drop=True)
+    ilce_grup['Genel Sıra'] = ilce_grup.index + 1
+
+    toplam_ilce_sayisi = len(ilce_grup)
+
+    def format_oran_exec(oran):
+        if pd.isna(oran) or oran in (float("inf"), float("-inf")):
+            oran = 0.0
+        if oran >= 70.0:
+            return f"<span style='color: #1e8449; font-weight: bold;'>%{oran:.2f}</span>"
+        if oran < 50.0:
+            return f"<span style='color: #c0392b; font-weight: bold;'>%{oran:.2f}</span>"
+        return f"<b>%{oran:.2f}</b>"
+
+    ozet_kartlar = {}
+    for t in ['Mamografi', 'Serviks', 'Kolorektal']:
+        top_ger = safe_int(df[f'{t} Gereken'].sum())
+        top_yap = safe_int(df[f'{t} Yapılan'].sum())
+        il_oran = (top_yap / top_ger * 100) if top_ger > 0 else 0.0
+        gecen = safe_int((ilce_grup[f'{t} Oranı'] >= 70.0).sum())
+        kalan = safe_int((ilce_grup[f'{t} Oranı'] < 70.0).sum())
+        gecen_yuzde = (gecen / toplam_ilce_sayisi * 100) if toplam_ilce_sayisi > 0 else 0.0
+        kalan_yuzde = (kalan / toplam_ilce_sayisi * 100) if toplam_ilce_sayisi > 0 else 0.0
+
+        sirali_t = ilce_grup.sort_values(by=[f'{t} Oranı', 'İlçe'], ascending=[False, True]).reset_index(drop=True)
+        en_iyi_ad = sirali_t.iloc[0]['İlçe'] if not sirali_t.empty else "-"
+        en_iyi_oran = float(sirali_t.iloc[0][f'{t} Oranı']) if not sirali_t.empty else 0.0
+        en_dusuk_ad = sirali_t.iloc[-1]['İlçe'] if not sirali_t.empty else "-"
+        en_dusuk_oran = float(sirali_t.iloc[-1][f'{t} Oranı']) if not sirali_t.empty else 0.0
+
+        ozet_kartlar[t] = {
+            'top_ger': f"{top_ger:,}".replace(",", "."),
+            'top_yap': f"{top_yap:,}".replace(",", "."),
+            'il_oran_html': format_oran_exec(il_oran),
+            'gecen': gecen,
+            'kalan': kalan,
+            'gecen_yuzde': gecen_yuzde,
+            'kalan_yuzde': kalan_yuzde,
+            'en_iyi': f"{en_iyi_ad} (%{en_iyi_oran:.2f})",
+            'en_dusuk': f"{en_dusuk_ad} (%{en_dusuk_oran:.2f})",
+        }
+
+    if logo_b64:
+        ust_baslik_html = f"""
+        <table class="top-header-table">
+            <tr>
+                <td width="18%" style="border: none;"></td>
+                <td width="64%" style="border: none; text-align: center; vertical-align: middle;">
+                    <h1 style="margin: 0 0 4px 0;">İstanbul İl Geneli KAN-TAR Yönetici Özeti Raporu</h1>
+                    <div class="header-info" style="margin: 0;"><b>Kapsanan Aylar:</b> {aylar_str} | <b>Değerlendirilen İlçe:</b> {toplam_ilce_sayisi}</div>
+                </td>
+                <td width="18%" style="border: none; text-align: right; vertical-align: top; padding: 0;">
+                    <img src="data:image/png;base64,{logo_b64}" width="105" />
+                </td>
+            </tr>
+        </table>
+        """
+    else:
+        ust_baslik_html = f"""
+        <h1>İstanbul İl Geneli KAN-TAR Yönetici Özeti Raporu</h1>
+        <div class="header-info"><b>Kapsanan Aylar:</b> {aylar_str} | <b>Değerlendirilen İlçe:</b> {toplam_ilce_sayisi}</div>
+        """
+
+    baraj_chart_b64 = create_istanbul_baraj_chart_base64(ilce_grup)
+    baraj_chart_html = (
+        f'<div class="chart-box"><img src="data:image/png;base64,{baraj_chart_b64}" width="525" /></div>'
+        if baraj_chart_b64 else ""
+    )
+
+    ranking_charts_html = ""
+    for tarama_turu in ['Mamografi', 'Serviks', 'Kolorektal']:
+        r_b64 = create_istanbul_ilce_ranking_chart_base64(ilce_grup, tarama_turu)
+        if r_b64:
+            ranking_charts_html += f"""
+            <div class="chart-box">
+                <img src="data:image/png;base64,{r_b64}" width="530" />
+            </div>
+            """
+
+    tablo_satirlari_html = ""
+    for _, r in ilce_grup.iterrows():
+        m_ger = f"{safe_int(r['Mamografi Gereken']):,}".replace(",", ".")
+        m_yap = f"{safe_int(r['Mamografi Yapılan']):,}".replace(",", ".")
+        s_ger = f"{safe_int(r['Serviks Gereken']):,}".replace(",", ".")
+        s_yap = f"{safe_int(r['Serviks Yapılan']):,}".replace(",", ".")
+        k_ger = f"{safe_int(r['Kolorektal Gereken']):,}".replace(",", ".")
+        k_yap = f"{safe_int(r['Kolorektal Yapılan']):,}".replace(",", ".")
+
+        gecilen_sayi = safe_int(r['Gecilen Baraj Sayisi'])
+        baraj_rozet_renk = "#1e8449" if gecilen_sayi == 3 else ("#d68910" if gecilen_sayi >= 1 else "#c0392b")
+
+        tablo_satirlari_html += f"""
+        <tr>
+            <td><b>{safe_int(r['Genel Sıra'])}.</b></td>
+            <td class="left-align"><b>{r['İlçe']}</b></td>
+            <td>{format_oran_exec(r['Mamografi Oranı'])}</td>
+            <td><b>{safe_int(r['Mamografi Sıra'])}.</b></td>
+            <td style="font-size: 7.2px; color: #555;">{m_yap} / {m_ger}</td>
+            <td>{format_oran_exec(r['Serviks Oranı'])}</td>
+            <td><b>{safe_int(r['Serviks Sıra'])}.</b></td>
+            <td style="font-size: 7.2px; color: #555;">{s_yap} / {s_ger}</td>
+            <td>{format_oran_exec(r['Kolorektal Oranı'])}</td>
+            <td><b>{safe_int(r['Kolorektal Sıra'])}.</b></td>
+            <td style="font-size: 7.2px; color: #555;">{k_yap} / {k_ger}</td>
+            <td>{format_oran_exec(r['Ortalama Oran'])}</td>
+            <td style="color: {baraj_rozet_renk}; font-weight: bold;">{gecilen_sayi} / 3</td>
+        </tr>
+        """
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="tr">
+    <head>
+    <meta charset="UTF-8">
+    <style>
+        {font_face_css}
+        @page {{ size: A4; margin: 0.9cm; }}
+        body {{ font-family: {font_family}; font-size: 9.5px; color: #333; }}
+        .top-header-table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; }}
+        h1 {{ text-align: center; color: #2c3e50; font-size: 16px; margin-bottom: 4px; font-family: {font_family}; }}
+        .header-info {{ text-align: center; font-size: 10.5px; margin-bottom: 14px; color: #7f8c8d; font-family: {font_family}; }}
+        h2 {{ color: #2c3e50; font-size: 12.5px; border-bottom: 1.5px solid #34495e; padding-bottom: 3px; margin-top: 14px; margin-bottom: 8px; font-family: {font_family}; }}
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 8px; }}
+        th, td {{ border: 1px solid #bdc3c7; padding: 3.5px 3px; font-size: 8px; font-family: {font_family}; text-align: center; }}
+        th {{ background-color: #ecf0f1; font-weight: bold; }}
+        .left-align {{ text-align: left; padding-left: 5px; }}
+        .summary-table th {{ background-color: #2c3e50; color: white; font-size: 10.5px; padding: 6px; }}
+        .summary-table td {{ font-size: 9.5px; padding: 7px; line-height: 1.45; background-color: #f9fbfc; }}
+        .chart-box {{ text-align: center; margin-top: 6px; margin-bottom: 10px; }}
+        .legend-note {{ font-size: 8px; color: #555; margin-bottom: 6px; }}
+    </style>
+    </head>
+    <body>
+        {ust_baslik_html}
+
+        <h2>1. İstanbul İl Geneli Performans ve %70 Hedef Barajı Özeti</h2>
+        <table class="summary-table">
+            <tr>
+                <th width="33.3%">Mamografi Taraması</th>
+                <th width="33.3%">Serviks Taraması</th>
+                <th width="33.3%">Kolorektal Taraması</th>
+            </tr>
+            <tr>
+                <td>
+                    <div style="font-size: 12.5px; margin-bottom: 3px;">İl Geneli Oran: {ozet_kartlar['Mamografi']['il_oran_html']}</div>
+                    <div>Gereken: <b>{ozet_kartlar['Mamografi']['top_ger']}</b> | Yapılan: <b>{ozet_kartlar['Mamografi']['top_yap']}</b></div>
+                    <div style="margin-top: 4px; color: #1e8449;"><b>%70 Barajını Geçen:</b> {ozet_kartlar['Mamografi']['gecen']} / {toplam_ilce_sayisi} İlçe (%{ozet_kartlar['Mamografi']['gecen_yuzde']:.1f})</div>
+                    <div style="color: #c0392b;"><b>%70 Altında Kalan:</b> {ozet_kartlar['Mamografi']['kalan']} / {toplam_ilce_sayisi} İlçe (%{ozet_kartlar['Mamografi']['kalan_yuzde']:.1f})</div>
+                    <div style="margin-top: 4px; font-size: 8px; color: #555;">En Yüksek: <b>{ozet_kartlar['Mamografi']['en_iyi']}</b><br>En Düşük: <b>{ozet_kartlar['Mamografi']['en_dusuk']}</b></div>
+                </td>
+                <td>
+                    <div style="font-size: 12.5px; margin-bottom: 3px;">İl Geneli Oran: {ozet_kartlar['Serviks']['il_oran_html']}</div>
+                    <div>Gereken: <b>{ozet_kartlar['Serviks']['top_ger']}</b> | Yapılan: <b>{ozet_kartlar['Serviks']['top_yap']}</b></div>
+                    <div style="margin-top: 4px; color: #1e8449;"><b>%70 Barajını Geçen:</b> {ozet_kartlar['Serviks']['gecen']} / {toplam_ilce_sayisi} İlçe (%{ozet_kartlar['Serviks']['gecen_yuzde']:.1f})</div>
+                    <div style="color: #c0392b;"><b>%70 Altında Kalan:</b> {ozet_kartlar['Serviks']['kalan']} / {toplam_ilce_sayisi} İlçe (%{ozet_kartlar['Serviks']['kalan_yuzde']:.1f})</div>
+                    <div style="margin-top: 4px; font-size: 8px; color: #555;">En Yüksek: <b>{ozet_kartlar['Serviks']['en_iyi']}</b><br>En Düşük: <b>{ozet_kartlar['Serviks']['en_dusuk']}</b></div>
+                </td>
+                <td>
+                    <div style="font-size: 12.5px; margin-bottom: 3px;">İl Geneli Oran: {ozet_kartlar['Kolorektal']['il_oran_html']}</div>
+                    <div>Gereken: <b>{ozet_kartlar['Kolorektal']['top_ger']}</b> | Yapılan: <b>{ozet_kartlar['Kolorektal']['top_yap']}</b></div>
+                    <div style="margin-top: 4px; color: #1e8449;"><b>%70 Barajını Geçen:</b> {ozet_kartlar['Kolorektal']['gecen']} / {toplam_ilce_sayisi} İlçe (%{ozet_kartlar['Kolorektal']['gecen_yuzde']:.1f})</div>
+                    <div style="color: #c0392b;"><b>%70 Altında Kalan:</b> {ozet_kartlar['Kolorektal']['kalan']} / {toplam_ilce_sayisi} İlçe (%{ozet_kartlar['Kolorektal']['kalan_yuzde']:.1f})</div>
+                    <div style="margin-top: 4px; font-size: 8px; color: #555;">En Yüksek: <b>{ozet_kartlar['Kolorektal']['en_iyi']}</b><br>En Düşük: <b>{ozet_kartlar['Kolorektal']['en_dusuk']}</b></div>
+                </td>
+            </tr>
+        </table>
+
+        {baraj_chart_html}
+
+        <h2>2. Tarama Türlerine Göre Tüm İlçelerin İl Sıralaması Grafikleri</h2>
+        {ranking_charts_html}
+
+        <h2>3. Tüm İlçelerin Karşılaştırmalı Başarı Oranları ve İl Sıralamaları</h2>
+        <div class="legend-note">
+            <b>Renk Göstergesi:</b> <span style="color: #1e8449; font-weight: bold;">Yeşil (%70 ve üzeri - Bakanlık Hedefi Üstü)</span> |
+            <b>Siyah (%50 - %69,99)</b> |
+            <span style="color: #c0392b; font-weight: bold;">Kırmızı (%50 altı - Kritik Uyarı)</span>
+        </div>
+        <table>
+            <tr>
+                <th rowspan="2" width="5%">Genel<br>Sıra</th>
+                <th rowspan="2" class="left-align" width="13%">İlçe</th>
+                <th colspan="3" width="22%">Mamografi</th>
+                <th colspan="3" width="22%">Serviks</th>
+                <th colspan="3" width="22%">Kolorektal</th>
+                <th rowspan="2" width="8%">3 Tarama<br>Ort. (%)</th>
+                <th rowspan="2" width="8%">%70 Geçilen<br>Tarama</th>
+            </tr>
+            <tr>
+                <th width="7%">Oran</th>
+                <th width="5%">Sıra</th>
+                <th width="10%">Yapılan/Ger.</th>
+                <th width="7%">Oran</th>
+                <th width="5%">Sıra</th>
+                <th width="10%">Yapılan/Ger.</th>
+                <th width="7%">Oran</th>
+                <th width="5%">Sıra</th>
+                <th width="10%">Yapılan/Ger.</th>
+            </tr>
+            {tablo_satirlari_html}
+        </table>
+    </body>
+    </html>
+    """
+
+    pdf_buffer = io.BytesIO()
+    pisa.CreatePDF(io.BytesIO(html_content.encode('utf-8')), dest=pdf_buffer, encoding='utf-8')
+    return pdf_buffer.getvalue()
+
+
 def get_ilce_rapor_pdf(df, secilen_ilce, secilen_aylar, logo_b64=None):
     fonts_loaded, font_face_css = setup_fonts()
     font_family = '"DejaVuSans", sans-serif' if fonts_loaded else "Helvetica, Arial, sans-serif"
@@ -1157,7 +1590,29 @@ if yuklenen_dosyalar:
                 sirali_ay_isimleri = sort_month_labels(secilen_aylar)
                 logo_hash = len(kantar_logo_b64) if kantar_logo_b64 else 0
 
+                def render_istanbul_yonetici_ozeti_bolumu(key_prefix="main"):
+                    st.subheader("🏛️ İstanbul İl Geneli Yönetici Özeti Raporu (PDF)")
+                    st.markdown(
+                        f"Seçili **{', '.join(sirali_ay_isimleri)}** dönemleri kapsamında İstanbul genelindeki tüm ilçelerin "
+                        "**3 tarama türündeki (Mamografi, Serviks, Kolorektal) başarı oranlarını**, **il sıralamalarını** "
+                        "ve **%70 Bakanlık hedef barajını geçen / altında kalan ilçe sayılarını** grafikler ve karşılaştırmalı "
+                        "özet tablolarla tek bir yönetici özeti PDF dosyası olarak indirebilirsiniz."
+                    )
+                    with st.spinner("İstanbul İl Geneli Yönetici Özeti PDF hazırlanıyor..."):
+                        il_ozet_pdf = get_istanbul_yonetici_ozeti_pdf(df, secilen_aylar, logo_b64=kantar_logo_b64)
+
+                    st.download_button(
+                        label="📥 İstanbul İl Geneli Yönetici Özeti İndir (PDF)",
+                        data=il_ozet_pdf,
+                        file_name="Istanbul_Il_Geneli_KANTAR_Yonetici_Ozeti.pdf",
+                        mime="application/pdf",
+                        key=f"istanbul_yonetici_ozeti_pdf_btn_{key_prefix}"
+                    )
+
                 if secilen_ilce == "Tüm İlçeler":
+                    render_istanbul_yonetici_ozeti_bolumu(key_prefix="all")
+
+                    st.markdown("---")
                     st.subheader("📦 Tüm İlçeler İçin Toplu PDF Raporu (.ZIP)")
                     
                     mevcut_ilceler = sorted([
@@ -1220,6 +1675,9 @@ if yuklenen_dosyalar:
                         file_name=f"{secilen_ilce}_Ilce_KANTAR_Raporu.pdf",
                         mime="application/pdf"
                     )
+
+                    st.markdown("---")
+                    render_istanbul_yonetici_ozeti_bolumu(key_prefix="single")
 
                     st.markdown("---")
                     st.markdown(f"### 📊 {secilen_ilce} İlçesi - ASM İlçe İçi Sıralaması ve Oranları")
